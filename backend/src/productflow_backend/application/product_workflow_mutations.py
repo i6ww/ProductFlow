@@ -22,7 +22,7 @@ from productflow_backend.domain.enums import (
     WorkflowNodeStatus,
     WorkflowNodeType,
 )
-from productflow_backend.domain.errors import BusinessValidationError, NotFoundError
+from productflow_backend.domain.errors import BusinessError, BusinessValidationError, NotFoundError
 from productflow_backend.infrastructure.db.models import (
     CopySet,
     PosterVariant,
@@ -119,7 +119,7 @@ def create_workflow_node(
     if node_type == WorkflowNodeType.PRODUCT_CONTEXT and any(
         node.node_type == WorkflowNodeType.PRODUCT_CONTEXT for node in workflow.nodes
     ):
-        raise ValueError("商品资料节点已存在")
+        raise BusinessValidationError("商品资料节点已存在")
     node = WorkflowNode(
         workflow_id=workflow.id,
         node_type=node_type,
@@ -170,12 +170,12 @@ def update_workflow_copy_set(
 ) -> ProductWorkflow:
     node = product_workflow_graph.get_node_or_raise(session, node_id)
     if node.node_type != WorkflowNodeType.COPY_GENERATION:
-        raise ValueError("只有文案节点可以编辑文案")
+        raise BusinessValidationError("只有文案节点可以编辑文案")
     workflow_id = node.workflow_id
     workflow = product_workflow_graph.get_workflow_or_raise(session, workflow_id)
     copy_set_id = (node.output_json or {}).get("copy_set_id")
     if not isinstance(copy_set_id, str) or not copy_set_id:
-        raise ValueError("文案节点还没有生成文案")
+        raise BusinessValidationError("文案节点还没有生成文案")
 
     copy_set = session.get(CopySet, copy_set_id)
     if copy_set is None or copy_set.product_id != workflow.product_id:
@@ -225,7 +225,7 @@ def upload_workflow_node_image(
     """把上传图存为商品参考图，并绑定到参考图节点输出。"""
     node = product_workflow_graph.get_node_or_raise(session, node_id)
     if node.node_type != WorkflowNodeType.REFERENCE_IMAGE:
-        raise ValueError("只有参考图节点可以上传图片")
+        raise BusinessValidationError("只有参考图节点可以上传图片")
     workflow = product_workflow_graph.get_workflow_or_raise(session, node.workflow_id)
     storage = storage or LocalStorage()
     relative_path = storage.save_reference_upload(workflow.product_id, filename, image_bytes)
@@ -277,11 +277,11 @@ def bind_workflow_node_image(
     找不到时再把海报文件复制成新的 reference SourceAsset。
     """
     if bool(source_asset_id) == bool(poster_variant_id):
-        raise ValueError("请选择一张图片")
+        raise BusinessValidationError("请选择一张图片")
 
     node = product_workflow_graph.get_node_or_raise(session, node_id)
     if node.node_type != WorkflowNodeType.REFERENCE_IMAGE:
-        raise ValueError("只有参考图节点可以填充图片")
+        raise BusinessValidationError("只有参考图节点可以填充图片")
     workflow = product_workflow_graph.get_workflow_or_raise(session, node.workflow_id)
 
     source_poster_variant_id: str | None = None
@@ -290,7 +290,7 @@ def bind_workflow_node_image(
         if asset is None or asset.product_id != workflow.product_id:
             raise NotFoundError("源图不存在")
         if asset.kind != SourceAssetKind.REFERENCE_IMAGE:
-            raise ValueError("只能绑定参考图素材")
+            raise BusinessValidationError("只能绑定参考图素材")
         if asset.source_poster_variant_id:
             poster = session.get(PosterVariant, asset.source_poster_variant_id)
             if poster is not None and poster.product_id == workflow.product_id:
@@ -340,9 +340,9 @@ def create_workflow_edge(
     workflow = get_or_create_product_workflow(session, product_id)
     nodes = {node.id for node in workflow.nodes}
     if source_node_id == target_node_id:
-        raise ValueError("工作流连线不能连接到自身")
+        raise BusinessValidationError("工作流连线不能连接到自身")
     if source_node_id not in nodes or target_node_id not in nodes:
-        raise ValueError("工作流连线节点不属于当前商品")
+        raise BusinessValidationError("工作流连线节点不属于当前商品")
     edge = WorkflowEdge(
         workflow_id=workflow.id,
         source_node_id=source_node_id,
@@ -357,9 +357,12 @@ def create_workflow_edge(
     refreshed = product_workflow_graph.get_workflow_or_raise(session, workflow.id)
     try:
         product_workflow_graph.topological_nodes(refreshed)
-    except ValueError:
+    except BusinessError:
         session.rollback()
         raise
+    except ValueError as exc:
+        session.rollback()
+        raise BusinessValidationError(str(exc)) from exc
     session.commit()
     session.expire_all()
     return product_workflow_graph.get_workflow_or_raise(session, workflow.id)
@@ -383,7 +386,7 @@ def delete_workflow_node(session: Session, *, node_id: str) -> ProductWorkflow:
         or WORKFLOW_RUN_GENERATION_TASK_CONTRACT.execution_is_queued(node.status)
         or WORKFLOW_RUN_GENERATION_TASK_CONTRACT.execution_is_running(node.status)
     ):
-        raise ValueError("运行中，稍后删除")
+        raise BusinessValidationError("运行中，稍后删除")
 
     workflow_id = workflow.id
     workflow.updated_at = now_utc()

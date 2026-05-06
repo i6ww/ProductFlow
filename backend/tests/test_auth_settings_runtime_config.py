@@ -8,7 +8,7 @@ from helpers import (
     _unlock_settings,
 )
 
-from productflow_backend.config import get_runtime_settings, get_settings
+from productflow_backend.config import CONFIG_DEFINITION_BY_KEY, RUNTIME_CONFIG_KEYS, get_runtime_settings, get_settings
 from productflow_backend.infrastructure.db.models import (
     AppSetting,
 )
@@ -122,6 +122,37 @@ def test_settings_api_requires_secondary_unlock(configured_env: Path) -> None:
     relogin_state = client.get("/api/settings/lock-state")
     assert relogin_state.status_code == 200
     assert relogin_state.json() == {"unlocked": False, "configured": True}
+
+
+def test_runtime_config_registry_excludes_env_only_settings(configured_env: Path) -> None:
+    assert RUNTIME_CONFIG_KEYS == set(CONFIG_DEFINITION_BY_KEY)
+    assert {
+        "admin_access_key",
+        "settings_access_token",
+        "session_secret",
+        "database_url",
+        "redis_url",
+    }.isdisjoint(RUNTIME_CONFIG_KEYS)
+
+
+def test_runtime_config_ignores_database_rows_for_env_only_settings(configured_env: Path) -> None:
+    session = get_session_factory()()
+    try:
+        session.add(AppSetting(key="admin_access_key", value="database-admin-key"))
+        session.add(AppSetting(key="settings_access_token", value="database-settings-token"))
+        session.add(AppSetting(key="session_secret", value="database-session-secret-123"))
+        session.add(AppSetting(key="database_url", value="sqlite:///database-override.db"))
+        session.add(AppSetting(key="redis_url", value="redis://database-override:6379/0"))
+        session.commit()
+    finally:
+        session.close()
+
+    settings = get_runtime_settings()
+    assert settings.admin_access_key == "super-secret-admin-key"
+    assert settings.settings_access_token == "super-secret-settings-token"
+    assert settings.session_secret == "super-secret-session-key-123"
+    assert settings.database_url != "sqlite:///database-override.db"
+    assert settings.redis_url == "redis://localhost:6379/9"
 
 
 def test_settings_unlock_does_not_bypass_missing_token_after_env_change(

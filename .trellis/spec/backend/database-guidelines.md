@@ -111,7 +111,30 @@ Product listing uses database-level pagination in `application/use_cases.py::lis
 separate count query. The route `presentation/routes/products.py::list_products_endpoint` constrains `page >= 1` and
 `1 <= page_size <= 100` using FastAPI `Query`.
 
-Do not reintroduce full-table product loads for list pages.
+`list_products(status=...)` must also stay database-filtered before eager loading and pagination:
+
+- `draft`: no confirmed copy set and no poster variants.
+- `copy_ready`: has `Product.current_confirmed_copy_set_id` and no poster variants.
+- `poster_ready`: has at least one poster variant.
+- `failed`: currently has no persisted product-level source of truth and should return no rows until a real state owner is
+  introduced.
+
+Keep the response shape unchanged. If product state semantics change, update both `derive_product_state(...)` and the SQL
+status filter together, then add a query behavior test. Do not reintroduce full-table product loads for list pages.
+
+### Runtime settings registry
+
+`config.py::CONFIG_DEFINITIONS` is the owner registry for settings that may be stored in `app_settings`.
+`RUNTIME_CONFIG_KEYS` must equal the keys in that registry. Env-only settings such as `ADMIN_ACCESS_KEY`,
+`SETTINGS_ACCESS_TOKEN`, `SESSION_SECRET`, `DATABASE_URL`, and `REDIS_URL` are required before database access or are
+secrets with separate lifecycle rules, so they must not be added to `CONFIG_DEFINITIONS` or persisted in `app_settings`.
+
+For runtime settings:
+
+- Defaults live on `Settings`.
+- UI/API metadata, allowed values, min/max, and secret masking live in `CONFIG_DEFINITIONS`.
+- Database rows override only keys in `RUNTIME_CONFIG_KEYS`.
+- Reset deletes the database row and falls back to the env/default `Settings` value.
 
 ## Scenario: Runtime admin access toggle
 
@@ -654,6 +677,10 @@ failures into safe persisted failure reasons instead of leaking provider details
 - ProductFlow `generation_count` remains an application-level repeated-generation concept. `image_tool_n` is an advanced
   provider field and must not be treated as a replacement for `generation_count` unless multi-output extraction and
   persistence are implemented end to end.
+- `tool_options` has two writers: workflow node config normalization and continuous image-session request validation. Both
+  must pass through `application/image_generation_core.normalize_image_generation_tool_options(...)`. Readers are workflow
+  image execution, queued image-session worker execution, and serializers that expose the saved task options. The field is
+  nullable; `None` means "use runtime defaults only".
 - Provider request/response JSON persisted for diagnostics must continue to sanitize base64 image data.
 - If a provider rejects a request that contains optional tool fields, retry once with a basic tool object containing only
   `type` and `size`. If that fallback succeeds, persist a compact compatibility note in sanitized provider metadata and

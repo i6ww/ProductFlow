@@ -186,7 +186,7 @@ def start_product_workflow_run(
     ordered_nodes = product_workflow_graph.topological_nodes(workflow)
     node_ids_to_run = _node_ids_to_run(session, workflow, start_node_id)
     if not node_ids_to_run:
-        raise ValueError("工作流没有可运行节点")
+        raise BusinessValidationError("工作流没有可运行节点")
 
     ensure_generation_capacity(session)
     run = WorkflowRun(workflow_id=workflow.id, status=WorkflowRunStatus.RUNNING)
@@ -625,7 +625,7 @@ def _execute_node(
         return _execute_copy_generation(session, workflow=workflow, node=node, dependencies=dependencies)
     if node.node_type == WorkflowNodeType.IMAGE_GENERATION:
         return _execute_image_generation(session, workflow=workflow, node=node, dependencies=dependencies)
-    raise ValueError("工作流节点类型不支持")
+    raise BusinessValidationError("工作流节点类型不支持")
 
 
 def _execute_product_context(product: Product, node: WorkflowNode) -> dict[str, Any]:
@@ -750,7 +750,7 @@ def _execute_image_generation(
     product_context = _effective_product_context(workflow, node.id, include_transitive=True)
     downstream_reference_nodes = _downstream_reference_nodes(workflow, node.id)
     if not downstream_reference_nodes:
-        raise ValueError("请先把生图节点连接到至少一个图片/参考图节点，再运行图片生成")
+        raise BusinessValidationError("请先把生图节点连接到至少一个图片/参考图节点，再运行图片生成")
 
     linked_copy_set_id = _optional_config_text(node.config_json, "copy_set_id") or incoming_context.copy_set_id
     copy_set = session.get(CopySet, linked_copy_set_id) if linked_copy_set_id else None

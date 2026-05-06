@@ -53,10 +53,8 @@ Use typed errors for newly touched expected failures:
 - Workflow graph integrity or selection problems that were legacy `400`s, such as an edge referencing a node outside the
   loaded graph, should use `BusinessValidationError` rather than `NotFoundError`.
 
-Legacy application use cases may still raise `ValueError` for expected business failures while migration is incremental:
-
-- Invalid edits or state transitions: helpers such as `_normalize_required_text(...)`, `_normalize_price(...)`, and
-  copy/poster use cases raise `ValueError` with user-facing messages.
+Legacy `ValueError` fallback remains only for already-existing compatibility paths and parser boundaries that are not
+the owner of HTTP status semantics. Newly touched application/business failures must use typed errors.
 
 Routes catch these typed errors through the existing `ValueError` boundary and convert them to `HTTPException`.
 
@@ -128,7 +126,8 @@ business failures. Keep using the shared presentation helper at the route bounda
 #### 5. Good/Base/Bad Cases
 
 - Good: `_get_product_or_raise(...)` raises `NotFoundError("商品不存在")`.
-- Base: existing normalization helpers may still raise `ValueError("价格格式不正确")` and map to `400`.
+- Base: provider/Pydantic payload normalization may still raise `ValueError` inside parsing boundaries; route-facing
+  business use cases should raise typed errors.
 - Bad: adding a new `if detail.endswith(...)` or exact Chinese string branch for newly converted typed errors.
 
 #### 6. Tests Required
@@ -136,6 +135,8 @@ business failures. Keep using the shared presentation helper at the route bounda
 - Unit test `raise_value_error_as_http(NotFoundError("资源已移除"))` returns `404` even without an `"不存在"` suffix.
 - Unit test generic `BusinessError` returns `400`.
 - Unit or route test poster-file missing remains `400` with detail `"海报文件不存在"`.
+- Application-level test newly touched business validations raise `BusinessValidationError`, for example product field
+  validation, workflow graph validation, and image-session generation validation.
 - Unit test legacy `ValueError` fallback preserves old `404` / `400` behavior.
 
 #### 7. Wrong vs Correct
@@ -283,6 +284,13 @@ return a generic queue/provider failure detail instead.
   - current `provider_response_id` / `provider_response_status` when available.
 - OpenAI Responses image generation should use background response creation and `responses.retrieve(...)` polling when the
   provider supports it. Each provider status response should refresh task progress while generation is still working.
+- Provider progress metadata fields are nullable because queued, legacy, failed-before-provider, and capacity-waiting tasks
+  may not have provider state. Writers are `application/image_sessions.py` worker progress helpers and
+  `infrastructure/queue.py` recovery helpers; readers are image-session status/detail serializers and recovery queries.
+  Serializers must pass through `None` for missing old rows rather than inventing placeholder values.
+- `progress_metadata` is a compact backend-owned snapshot for UI/debug display. Current keys are optional and may include
+  `provider_response`, `candidate_index`, `candidate_count`, `generated_asset_id`, and `round_id`; code that reads it must
+  tolerate missing keys and non-provider tasks.
 - Failure/retry settlement must update `ImageSessionGenerationTask` independently from the parent `ImageSession`. Parent
   `updated_at`/title touches should use tolerant SQL `UPDATE image_sessions ... WHERE id = ...`-style updates instead of
   requiring a live parent ORM instance, because the session row may have been deleted or a previously loaded ORM row may

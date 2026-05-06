@@ -17,6 +17,7 @@ from productflow_backend.domain.enums import (
     SourceAssetKind,
     WorkflowNodeType,
 )
+from productflow_backend.domain.errors import BusinessValidationError
 from productflow_backend.infrastructure.db.models import (
     PosterVariant,
     Product,
@@ -170,7 +171,7 @@ def _poster_kind_from_config(config: dict[str, Any]) -> PosterKind:
     try:
         return PosterKind(str(raw))
     except ValueError as exc:
-        raise ValueError("生图节点包含不支持的图片类型") from exc
+        raise BusinessValidationError("生图节点包含不支持的图片类型") from exc
 
 
 def _image_size_from_config(config: dict[str, Any]) -> str | None:

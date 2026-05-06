@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, exists, func, literal, select
 from sqlalchemy.orm import Session, selectinload
 
 from productflow_backend.application.time import now_utc
@@ -13,9 +13,10 @@ from productflow_backend.domain.enums import (
     ProductWorkflowState,
     SourceAssetKind,
 )
-from productflow_backend.domain.errors import NotFoundError
+from productflow_backend.domain.errors import BusinessValidationError, NotFoundError
 from productflow_backend.infrastructure.db.models import (
     CopySet,
+    PosterVariant,
     Product,
     ProductWorkflow,
     SourceAsset,
@@ -27,9 +28,9 @@ from productflow_backend.infrastructure.storage import LocalStorage
 def _normalize_required_text(value: str, *, field_name: str, max_length: int) -> str:
     normalized = value.strip()
     if not normalized:
-        raise ValueError(f"{field_name}不能为空")
+        raise BusinessValidationError(f"{field_name}不能为空")
     if len(normalized) > max_length:
-        raise ValueError(f"{field_name}不能超过 {max_length} 个字符")
+        raise BusinessValidationError(f"{field_name}不能超过 {max_length} 个字符")
     return normalized
 
 
@@ -40,7 +41,7 @@ def _normalize_optional_text(value: str | None, *, field_name: str, max_length: 
     if not normalized:
         return None
     if len(normalized) > max_length:
-        raise ValueError(f"{field_name}不能超过 {max_length} 个字符")
+        raise BusinessValidationError(f"{field_name}不能超过 {max_length} 个字符")
     return normalized
 
 
@@ -50,11 +51,11 @@ def _normalize_price(value: str | None) -> Decimal | None:
     try:
         price = Decimal(value.strip())
     except InvalidOperation as exc:
-        raise ValueError("价格格式不正确") from exc
+        raise BusinessValidationError("价格格式不正确") from exc
     if not price.is_finite() or price < 0:
-        raise ValueError("价格必须是非负数字")
+        raise BusinessValidationError("价格必须是非负数字")
     if abs(price.as_tuple().exponent) > 2:
-        raise ValueError("价格最多保留两位小数")
+        raise BusinessValidationError("价格最多保留两位小数")
     return price
 
 
@@ -94,6 +95,19 @@ def derive_product_state(product: Product) -> ProductWorkflowState:
     if product.current_confirmed_copy_set_id:
         return ProductWorkflowState.COPY_READY
     return ProductWorkflowState.DRAFT
+
+
+def _product_status_filter(status: ProductWorkflowState):
+    has_poster = exists(
+        select(literal(1)).select_from(PosterVariant).where(PosterVariant.product_id == Product.id)
+    ).correlate(Product)
+    if status == ProductWorkflowState.POSTER_READY:
+        return has_poster
+    if status == ProductWorkflowState.COPY_READY:
+        return Product.current_confirmed_copy_set_id.is_not(None) & ~has_poster
+    if status == ProductWorkflowState.DRAFT:
+        return Product.current_confirmed_copy_set_id.is_(None) & ~has_poster
+    return literal(False)
 
 
 def create_product(
@@ -181,7 +195,7 @@ def delete_reference_image(
     if asset is None:
         raise NotFoundError("商品参考图不存在")
     if asset.kind != SourceAssetKind.REFERENCE_IMAGE:
-        raise ValueError("只能删除商品参考图")
+        raise BusinessValidationError("只能删除商品参考图")
 
     product_id = asset.product_id
     storage_path = asset.storage_path
@@ -210,12 +224,10 @@ def list_products(
         products = session.scalars(_product_query().offset(start).limit(page_size)).all()
         return list(products), total
 
-    products = session.scalars(_product_query()).all()
-    products = [item for item in products if derive_product_state(item) == status]
-    total = len(products)
-
-    end = start + page_size
-    return products[start:end], total
+    status_filter = _product_status_filter(status)
+    total = session.scalar(select(func.count()).select_from(Product).where(status_filter)) or 0
+    products = session.scalars(_product_query().where(status_filter).offset(start).limit(page_size)).all()
+    return list(products), total
 
 
 def get_product_detail(session: Session, product_id: str) -> Product:
@@ -238,7 +250,7 @@ def delete_product(
         )
     )
     if active_workflow_run is not None:
-        raise ValueError("商品工作流运行中，稍后删除")
+        raise BusinessValidationError("商品工作流运行中，稍后删除")
     storage = storage or LocalStorage()
     session.delete(product)
     session.commit()

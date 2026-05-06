@@ -11,15 +11,22 @@ from helpers import (
     _make_demo_image_bytes,
     _wait_for_workflow_run,
 )
+from sqlalchemy import event
 
 from productflow_backend.application.use_cases import (
     add_reference_images,
     create_product,
+    list_products,
 )
 from productflow_backend.domain.enums import (
+    CopyStatus,
+    PosterKind,
+    ProductWorkflowState,
     SourceAssetKind,
 )
 from productflow_backend.infrastructure.db.models import (
+    CopySet,
+    PosterVariant,
     SourceAsset,
 )
 
@@ -151,6 +158,145 @@ def test_reference_images_can_be_attached_to_product(db_session, configured_env:
     reference_assets = [asset for asset in updated.source_assets if asset.kind == SourceAssetKind.REFERENCE_IMAGE]
     assert len(reference_assets) == 2
     assert all((Path(configured_env) / asset.storage_path).exists() for asset in reference_assets)
+
+
+def test_product_status_filter_uses_database_pagination_before_eager_loading(db_session, configured_env: Path) -> None:
+    draft = create_product(
+        db_session,
+        name="草稿商品",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="draft.png",
+        content_type="image/png",
+    )
+    copy_ready = create_product(
+        db_session,
+        name="文案商品",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="copy.png",
+        content_type="image/png",
+    )
+    poster_ready = create_product(
+        db_session,
+        name="海报商品",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="poster.png",
+        content_type="image/png",
+    )
+
+    copy_set = CopySet(
+        product_id=copy_ready.id,
+        status=CopyStatus.CONFIRMED,
+        title="标题",
+        selling_points=["卖点"],
+        poster_headline="海报标题",
+        cta="购买",
+        model_title="标题",
+        model_selling_points=["卖点"],
+        model_poster_headline="海报标题",
+        model_cta="购买",
+        provider_name="test",
+        model_name="test",
+        prompt_version="test",
+    )
+    db_session.add(copy_set)
+    db_session.flush()
+    copy_ready.current_confirmed_copy_set_id = copy_set.id
+
+    poster_copy_set = CopySet(
+        product_id=poster_ready.id,
+        status=CopyStatus.CONFIRMED,
+        title="标题",
+        selling_points=["卖点"],
+        poster_headline="海报标题",
+        cta="购买",
+        model_title="标题",
+        model_selling_points=["卖点"],
+        model_poster_headline="海报标题",
+        model_cta="购买",
+        provider_name="test",
+        model_name="test",
+        prompt_version="test",
+    )
+    db_session.add(poster_copy_set)
+    db_session.flush()
+    poster_ready.current_confirmed_copy_set_id = poster_copy_set.id
+    db_session.add(
+        PosterVariant(
+            product_id=poster_ready.id,
+            copy_set_id=poster_copy_set.id,
+            kind=PosterKind.MAIN_IMAGE,
+            template_name="test",
+            storage_path="products/poster/poster.png",
+            width=800,
+            height=800,
+        )
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    product_selects: list[str] = []
+
+    @event.listens_for(db_session.bind, "before_cursor_execute")
+    def record_product_query(conn, cursor, statement, parameters, context, executemany):
+        normalized_statement = " ".join(statement.lower().split())
+        if (
+            normalized_statement.startswith("select products.id")
+            and "from products" in normalized_statement
+            and "limit" in normalized_statement
+        ):
+            product_selects.append(normalized_statement)
+
+    try:
+        products, total = list_products(
+            db_session,
+            status=ProductWorkflowState.DRAFT,
+            page=1,
+            page_size=1,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", record_product_query)
+
+    assert total == 1
+    assert [product.id for product in products] == [draft.id]
+    assert len(product_selects) == 1
+    assert "exists" in product_selects[0]
+    assert "limit" in product_selects[0]
+
+    copy_products, copy_total = list_products(
+        db_session,
+        status=ProductWorkflowState.COPY_READY,
+        page=1,
+        page_size=10,
+    )
+    poster_products, poster_total = list_products(
+        db_session,
+        status=ProductWorkflowState.POSTER_READY,
+        page=1,
+        page_size=10,
+    )
+    failed_products, failed_total = list_products(
+        db_session,
+        status=ProductWorkflowState.FAILED,
+        page=1,
+        page_size=10,
+    )
+
+    assert copy_total == 1
+    assert [product.id for product in copy_products] == [copy_ready.id]
+    assert poster_total == 1
+    assert [product.id for product in poster_products] == [poster_ready.id]
+    assert failed_total == 0
+    assert failed_products == []
+
 
 def test_product_reference_image_can_be_deleted(configured_env: Path, db_session) -> None:
     from productflow_backend.presentation.api import create_app

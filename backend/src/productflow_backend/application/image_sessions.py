@@ -181,8 +181,8 @@ def _find_session_asset_or_raise(
         raise NotFoundError(missing_message)
     if expected_kind is not None and asset.kind != expected_kind:
         if expected_kind == ImageSessionAssetKind.GENERATED_IMAGE:
-            raise ValueError("只能从会话生成图继续")
-        raise ValueError("只能选择会话参考图参与本轮生成")
+            raise BusinessValidationError("只能从会话生成图继续")
+        raise BusinessValidationError("只能选择会话参考图参与本轮生成")
     return asset
 
 
@@ -222,7 +222,7 @@ def _build_branch_generation_context(
     normalized_base_asset_id: str | None = None
     selected_reference_ids = _unique_ids(selected_reference_asset_ids)
     if (1 if base_asset_id else 0) + len(selected_reference_ids) > MAX_BRANCH_CONTEXT_IMAGES:
-        raise ValueError("本轮最多选择 6 张图片上下文（含分支基图）")
+        raise BusinessValidationError("本轮最多选择 6 张图片上下文（含分支基图）")
 
     if base_asset_id:
         base_asset = _find_session_asset_or_raise(
@@ -258,11 +258,11 @@ def _validate_generation_request(
     current_generation_task_id: str | None = None,
 ) -> tuple[str, str | None, list[str]]:
     if not 1 <= generation_count <= 4:
-        raise ValueError("一次生成数量必须在 1-4 张之间")
+        raise BusinessValidationError("一次生成数量必须在 1-4 张之间")
     normalized_size = normalize_image_generation_size(size)
     selected_reference_ids = _unique_ids(selected_reference_asset_ids)
     if (1 if base_asset_id else 0) + len(selected_reference_ids) > MAX_BRANCH_CONTEXT_IMAGES:
-        raise ValueError("本轮最多选择 6 张图片上下文（含分支基图）")
+        raise BusinessValidationError("本轮最多选择 6 张图片上下文（含分支基图）")
 
     normalized_base_asset_id: str | None = None
     if base_asset_id:
@@ -445,7 +445,7 @@ def delete_image_session_reference_image(
     if asset is None:
         raise NotFoundError("会话参考图不存在")
     if asset.kind != ImageSessionAssetKind.REFERENCE_UPLOAD:
-        raise ValueError("只能删除会话参考图")
+        raise BusinessValidationError("只能删除会话参考图")
 
     storage = storage or LocalStorage()
     storage_path = asset.storage_path
@@ -1169,11 +1169,11 @@ def attach_image_session_asset_to_product(
     if asset is None:
         raise NotFoundError("会话图片不存在")
     if asset.kind != ImageSessionAssetKind.GENERATED_IMAGE:
-        raise ValueError("只有生成结果可以写回商品")
+        raise BusinessValidationError("只有生成结果可以写回商品")
 
     resolved_product_id = product_id or image_session.product_id
     if not resolved_product_id:
-        raise ValueError("请选择要写回的商品")
+        raise BusinessValidationError("请选择要写回的商品")
     product = _get_product_or_raise(session, resolved_product_id)
 
     storage = storage or LocalStorage()

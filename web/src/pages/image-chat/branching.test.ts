@@ -13,6 +13,8 @@ import {
   mergeImageSessionStatusIntoDetail,
   reconcileImageSessionSelection,
   requiresImageSessionGenerationBase,
+  selectImageGenerationTaskNextPlaceholderId,
+  selectSubmittedImageGenerationTaskPlaceholderId,
   selectVisibleGenerationTasks,
   shouldBlockDuplicateGenerationSubmit,
   shouldRefreshImageSessionDetailFromStatus,
@@ -420,6 +422,92 @@ describe("image chat branching helpers", () => {
       "failed-new",
       "old-success-4",
     ]);
+  });
+
+  it("selects the matching submitted generation task placeholder after submit", () => {
+    const payload = {
+      prompt: "prompt",
+      size: "1024x1024",
+      base_asset_id: "base-1",
+      selected_reference_asset_ids: ["ref-1"],
+      generation_count: 3,
+      tool_options: { quality: "high" as const },
+    };
+    const tasks = [
+      task({
+        id: "newest-but-other",
+        status: "queued",
+        prompt: "other",
+        generation_count: 1,
+        created_at: "2026-04-27T00:03:00Z",
+      }),
+      task({
+        id: "matching",
+        status: "running",
+        prompt: "prompt",
+        size: "1024x1024",
+        base_asset_id: "base-1",
+        selected_reference_asset_ids: ["ref-1"],
+        generation_count: 3,
+        completed_candidates: 1,
+        active_candidate_index: 2,
+        tool_options: { quality: "high" },
+        created_at: "2026-04-27T00:02:00Z",
+      }),
+    ];
+
+    expect(selectSubmittedImageGenerationTaskPlaceholderId(tasks, payload)).toBe("task:matching:candidate:2");
+  });
+
+  it("falls back to the newest active task placeholder when submit payload has no exact match", () => {
+    const payload = {
+      prompt: "missing",
+      size: "1024x1024",
+      base_asset_id: null,
+      selected_reference_asset_ids: [],
+      generation_count: 1,
+      tool_options: null,
+    };
+
+    expect(
+      selectSubmittedImageGenerationTaskPlaceholderId(
+        [
+          task({ id: "old-failed", status: "failed", created_at: "2026-04-27T00:01:00Z" }),
+          task({
+            id: "new-running",
+            status: "running",
+            generation_count: 4,
+            completed_candidates: 2,
+            active_candidate_index: null,
+            created_at: "2026-04-27T00:02:00Z",
+          }),
+        ],
+        payload,
+      ),
+    ).toBe("task:new-running:candidate:3");
+  });
+
+  it("selects the next retry placeholder from active candidate or completed count", () => {
+    expect(
+      selectImageGenerationTaskNextPlaceholderId(
+        task({
+          id: "retry-active",
+          generation_count: 4,
+          completed_candidates: 1,
+          active_candidate_index: 3,
+        }),
+      ),
+    ).toBe("task:retry-active:candidate:3");
+    expect(
+      selectImageGenerationTaskNextPlaceholderId(
+        task({
+          id: "retry-next",
+          generation_count: 4,
+          completed_candidates: 2,
+          active_candidate_index: null,
+        }),
+      ),
+    ).toBe("task:retry-next:candidate:3");
   });
 
   it("detects active generation tasks", () => {

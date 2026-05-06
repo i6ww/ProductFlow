@@ -55,13 +55,14 @@ import {
   clampGenerationCount,
   compactImageToolOptions,
   findImageHistoryPlaceholder,
-  getImageGenerationTaskPlaceholderId,
   isImageSessionGenerationTaskActive,
   isImageSessionGenerationTaskRetryable,
   mergeImageSessionStatusIntoDetail,
   pruneSelectedReferenceIds,
   reconcileImageSessionSelection,
   requiresImageSessionGenerationBase,
+  selectImageGenerationTaskNextPlaceholderId,
+  selectSubmittedImageGenerationTaskPlaceholderId,
   selectVisibleGenerationTasks,
   shouldBlockDuplicateGenerationSubmit,
   shouldRefreshImageSessionDetailFromStatus,
@@ -182,46 +183,6 @@ function placeholderStatusClass(candidate: ImageHistoryPlaceholderCandidate) {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
   return "border-indigo-200 bg-indigo-50 text-indigo-700";
-}
-
-function taskMatchesSubmitPayload(task: ImageSessionGenerationTask, payload: ImageGenerationSubmitPayload) {
-  return (
-    buildImageGenerationSubmitSignature({
-      prompt: task.prompt,
-      size: task.size,
-      base_asset_id: task.base_asset_id,
-      selected_reference_asset_ids: task.selected_reference_asset_ids,
-      generation_count: task.generation_count,
-      tool_options: task.tool_options,
-    }) === buildImageGenerationSubmitSignature(payload)
-  );
-}
-
-function selectSubmittedTaskPlaceholderId(
-  tasks: ImageSessionGenerationTask[],
-  payload: ImageGenerationSubmitPayload,
-): string | null {
-  const newestTasks = [...tasks].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-  const task =
-    newestTasks.find((item) => taskMatchesSubmitPayload(item, payload)) ??
-    newestTasks.find(isImageSessionGenerationTaskActive) ??
-    newestTasks[0];
-  if (!task) {
-    return null;
-  }
-  const candidateIndex = Math.min(
-    clampGenerationCount(task.generation_count || 1),
-    task.active_candidate_index ?? Math.max(1, task.completed_candidates + 1),
-  );
-  return getImageGenerationTaskPlaceholderId(task, candidateIndex);
-}
-
-function selectTaskNextPlaceholderId(task: ImageSessionGenerationTask): string {
-  const candidateIndex = Math.min(
-    clampGenerationCount(task.generation_count || 1),
-    task.active_candidate_index ?? Math.max(1, task.completed_candidates + 1),
-  );
-  return getImageGenerationTaskPlaceholderId(task, candidateIndex);
 }
 
 export function ImageChatPage() {
@@ -620,7 +581,7 @@ export function ImageChatPage() {
     onSuccess: (updated, variables) => {
       queryClient.setQueryData(["image-session", updated.id], updated);
       void queryClient.invalidateQueries({ queryKey: ["image-sessions", productId ?? "standalone"] });
-      const placeholderId = selectSubmittedTaskPlaceholderId(updated.generation_tasks, variables);
+      const placeholderId = selectSubmittedImageGenerationTaskPlaceholderId(updated.generation_tasks, variables);
       if (placeholderId) {
         setSelectedTaskPlaceholderId(placeholderId);
         setSelectedGeneratedAssetId(null);
@@ -648,7 +609,7 @@ export function ImageChatPage() {
       void queryClient.invalidateQueries({ queryKey: ["image-sessions", productId ?? "standalone"] });
       const retriedTask = updated.generation_tasks.find((task) => task.id === input.taskId);
       if (retriedTask) {
-        setSelectedTaskPlaceholderId(selectTaskNextPlaceholderId(retriedTask));
+        setSelectedTaskPlaceholderId(selectImageGenerationTaskNextPlaceholderId(retriedTask));
         setSelectedGeneratedAssetId(null);
       }
       setSuccessMessage("已重新提交重试任务");

@@ -136,6 +136,39 @@ export function getImageGenerationTaskPlaceholderId(task: ImageSessionGeneration
   return `task:${task.id}:candidate:${candidateIndex}`;
 }
 
+function taskMatchesSubmitPayload(task: ImageSessionGenerationTask, payload: ImageGenerationSubmitPayload): boolean {
+  return (
+    buildImageGenerationSubmitSignature({
+      prompt: task.prompt,
+      size: task.size,
+      base_asset_id: task.base_asset_id,
+      selected_reference_asset_ids: task.selected_reference_asset_ids,
+      generation_count: task.generation_count,
+      tool_options: task.tool_options,
+    }) === buildImageGenerationSubmitSignature(payload)
+  );
+}
+
+export function selectImageGenerationTaskNextPlaceholderId(task: ImageSessionGenerationTask): string {
+  const candidateIndex = Math.min(
+    clampGenerationCount(task.generation_count || 1),
+    task.active_candidate_index ?? Math.max(1, task.completed_candidates + 1),
+  );
+  return getImageGenerationTaskPlaceholderId(task, candidateIndex);
+}
+
+export function selectSubmittedImageGenerationTaskPlaceholderId(
+  tasks: ImageSessionGenerationTask[],
+  payload: ImageGenerationSubmitPayload,
+): string | null {
+  const newestTasks = [...tasks].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+  const task =
+    newestTasks.find((item) => taskMatchesSubmitPayload(item, payload)) ??
+    newestTasks.find(isImageSessionGenerationTaskActive) ??
+    newestTasks[0];
+  return task ? selectImageGenerationTaskNextPlaceholderId(task) : null;
+}
+
 function getPlaceholderCandidateStatus(
   task: ImageSessionGenerationTask,
   candidateIndex: number,

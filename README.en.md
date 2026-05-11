@@ -59,9 +59,11 @@ The current form is a private single-admin instance. A self-hosted deployment re
 
 ![Product workbench example](images/preview2.png)
 
-![Workbench Images panel example](images/preview3.png)
+![New product example](images/preview3.png)
 
-![Generated result example](images/preview4.png)
+![Image-to-image panel example](images/preview4.png)
+
+![Dark mode and English mode example](images/preview5.png)
 
 ## Current Boundaries
 

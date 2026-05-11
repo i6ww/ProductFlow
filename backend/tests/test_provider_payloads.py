@@ -418,6 +418,23 @@ def test_copy_payload_v2_normalizes_real_provider_layout_variants() -> None:
     assert payload.content.sections[1].body == "特写底部沥水孔，说明洗护瓶和清洁工具放置更清爽。"
 
 
+def test_copy_payload_v2_normalizes_visual_guidance_text() -> None:
+    payload = normalize_copy_payload(
+        {
+            "version": 2,
+            "summary": "冷灰色手机壳",
+            "content": {
+                "kind": "blocks",
+                "blocks": [{"id": "headline", "text": "适合通勤和日常搭配"}],
+            },
+            "visual_guidance": "适合搭配冷灰、黑白背景，突出简洁文艺的视觉感。",
+        }
+    )
+
+    assert payload.visual_guidance is not None
+    assert payload.visual_guidance.composition_hint == "适合搭配冷灰、黑白背景，突出简洁文艺的视觉感。"
+
+
 def test_copy_payload_v2_normalizes_layout_object_fields_to_sections() -> None:
     payload = normalize_copy_payload(
         {

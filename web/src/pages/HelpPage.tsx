@@ -18,6 +18,7 @@ import {
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { SelectField } from "../components/SelectField";
 import { TopNav } from "../components/TopNav";
 import { useI18n } from "../lib/preferences";
 
@@ -1477,25 +1478,21 @@ export function HelpPage() {
             <label htmlFor="doc-page" className="mb-2 block text-xs font-semibold text-slate-500 dark:text-slate-400">
               {t("help.pageSelect")}
             </label>
-            <select
+            <SelectField
               id="doc-page"
               value={page.slug}
-              onChange={(event) => openPage(event.target.value)}
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0b1220] dark:text-slate-100"
-            >
-              {navGroups.map((group) => (
-                <optgroup key={group.title} label={group.title}>
-                  {group.pages.map((slug) => {
+              groups={navGroups.map((group) => ({
+                label: group.title,
+                options: group.pages
+                  .map((slug) => {
                     const item = pagesBySlug.get(slug);
-                    return item ? (
-                      <option key={item.slug} value={item.slug}>
-                        {item.title}
-                      </option>
-                    ) : null;
-                  })}
-                </optgroup>
-              ))}
-            </select>
+                    return item ? { value: item.slug, label: item.title } : null;
+                  })
+                  .filter((item): item is { value: string; label: string } => Boolean(item)),
+              }))}
+              onChange={openPage}
+              radius="lg"
+            />
           </div>
         </aside>
 

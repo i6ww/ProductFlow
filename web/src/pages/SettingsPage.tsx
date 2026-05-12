@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { SelectField } from "../components/SelectField";
 import { TopNav } from "../components/TopNav";
 import { api, ApiError } from "../lib/api";
 import { useI18n } from "../lib/preferences";
@@ -160,18 +161,12 @@ function ConfigField({ item, value, secretTouched, isResetting, compact = false,
         ))}
       </div>
     ) : item.input_type === "select" ? (
-      <select
+      <SelectField
         id={item.key}
         value={String(value)}
-        onChange={(event) => onChange(event.target.value)}
-        className={baseInputClass}
-      >
-        {item.options.map((option) => (
-          <option key={`${item.key}-${option.value}`} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        options={item.options}
+        onChange={onChange}
+      />
     ) : item.input_type === "textarea" ? (
       <textarea
         id={item.key}

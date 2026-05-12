@@ -21,6 +21,7 @@ import { ImageGenerationSettingsPanel } from "../../components/ImageGenerationSe
 import { ImageGenerationSettingsTabs, type ImageGenerationSettingsTab } from "../../components/ImageGenerationSettingsTabs";
 import { ImageToolControls } from "../../components/ImageToolControls";
 import { PromptPreviewDialog, type PromptPreview } from "../../components/PromptPreviewDialog";
+import { SelectField } from "../../components/SelectField";
 import type { DownloadableImage } from "../../lib/image-downloads";
 import type { ImageSizeOption } from "../../lib/imageSizes";
 import { formatDateTime, formatPrice } from "../../lib/format";
@@ -479,19 +480,16 @@ function ReferenceImageInspector({
         <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-zinc-400 dark:text-slate-400">
           {t("detail.inspector.role")}
         </span>
-        <select
+        <SelectField
           value={draft.role}
-          onChange={(event) =>
-            onDraftChange({ ...draft, role: event.target.value })
-          }
-          className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 dark:border-slate-700 dark:bg-[#0b1220] dark:text-slate-100 dark:focus:border-violet-400 dark:focus:ring-violet-400"
-        >
-          {REFERENCE_ROLE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {t(option.labelKey)}
-            </option>
-          ))}
-        </select>
+          options={REFERENCE_ROLE_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.labelKey),
+          }))}
+          onChange={(nextValue) => onDraftChange({ ...draft, role: nextValue })}
+          radius="lg"
+          visualSize="sm"
+        />
       </label>
       <ImageDropZone
         ariaLabel={hasImage ? t("detail.inspector.replaceReference") : t("detail.inspector.uploadReference")}

@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
-
 import { DEFAULT_IMAGE_TOOL_ALLOWED_FIELDS } from "../lib/imageToolOptions";
 import { useI18n } from "../lib/preferences";
 import type { ImageToolOptionKey, ImageToolOptions } from "../lib/types";
+import type { SelectFieldOption } from "./SelectField";
+import { SelectField } from "./SelectField";
 
 interface ImageToolControlsProps {
   value: ImageToolOptions;
@@ -50,25 +50,27 @@ export function ImageToolControls({
             label={t("imageTool.quality")}
             value={value.quality ?? ""}
             onChange={(next) => update({ quality: (next || null) as ImageToolOptions["quality"] })}
-          >
-            <option value="">{t("imageTool.default")}</option>
-            <option value="auto">Auto</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </CompactSelect>
+            options={[
+              { value: "", label: t("imageTool.default") },
+              { value: "auto", label: "Auto" },
+              { value: "low", label: "Low" },
+              { value: "medium", label: "Medium" },
+              { value: "high", label: "High" },
+            ]}
+          />
         ) : null}
         {allowed.has("output_format") ? (
           <CompactSelect
             label={t("imageTool.format")}
             value={value.output_format ?? ""}
             onChange={(next) => update({ output_format: (next || null) as ImageToolOptions["output_format"] })}
-          >
-            <option value="">{t("imageTool.default")}</option>
-            <option value="png">PNG</option>
-            <option value="jpeg">JPEG</option>
-            <option value="webp">WebP</option>
-          </CompactSelect>
+            options={[
+              { value: "", label: t("imageTool.default") },
+              { value: "png", label: "PNG" },
+              { value: "jpeg", label: "JPEG" },
+              { value: "webp", label: "WebP" },
+            ]}
+          />
         ) : null}
         {allowed.has("output_compression") ? (
           <CompactInput
@@ -84,46 +86,50 @@ export function ImageToolControls({
             label={t("imageTool.background")}
             value={value.background ?? ""}
             onChange={(next) => update({ background: (next || null) as ImageToolOptions["background"] })}
-          >
-            <option value="">{t("imageTool.default")}</option>
-            <option value="auto">Auto</option>
-            <option value="opaque">Opaque</option>
-            <option value="transparent">Transparent</option>
-          </CompactSelect>
+            options={[
+              { value: "", label: t("imageTool.default") },
+              { value: "auto", label: "Auto" },
+              { value: "opaque", label: "Opaque" },
+              { value: "transparent", label: "Transparent" },
+            ]}
+          />
         ) : null}
         {allowed.has("moderation") ? (
           <CompactSelect
             label={t("imageTool.moderation")}
             value={value.moderation ?? ""}
             onChange={(next) => update({ moderation: (next || null) as ImageToolOptions["moderation"] })}
-          >
-            <option value="">{t("imageTool.default")}</option>
-            <option value="auto">Auto</option>
-            <option value="low">Low</option>
-          </CompactSelect>
+            options={[
+              { value: "", label: t("imageTool.default") },
+              { value: "auto", label: "Auto" },
+              { value: "low", label: "Low" },
+            ]}
+          />
         ) : null}
         {allowed.has("action") ? (
           <CompactSelect
             label="Action"
             value={value.action ?? ""}
             onChange={(next) => update({ action: (next || null) as ImageToolOptions["action"] })}
-          >
-            <option value="">{t("imageTool.default")}</option>
-            <option value="auto">Auto</option>
-            <option value="generate">Generate</option>
-            <option value="edit">Edit</option>
-          </CompactSelect>
+            options={[
+              { value: "", label: t("imageTool.default") },
+              { value: "auto", label: "Auto" },
+              { value: "generate", label: "Generate" },
+              { value: "edit", label: "Edit" },
+            ]}
+          />
         ) : null}
         {allowed.has("input_fidelity") ? (
           <CompactSelect
             label="Fidelity"
             value={value.input_fidelity ?? ""}
             onChange={(next) => update({ input_fidelity: (next || null) as ImageToolOptions["input_fidelity"] })}
-          >
-            <option value="">{t("imageTool.default")}</option>
-            <option value="low">Low</option>
-            <option value="high">High</option>
-          </CompactSelect>
+            options={[
+              { value: "", label: t("imageTool.default") },
+              { value: "low", label: "Low" },
+              { value: "high", label: "High" },
+            ]}
+          />
         ) : null}
         {allowed.has("partial_images") ? (
           <CompactInput
@@ -179,23 +185,23 @@ function CompactSelect({
   label,
   value,
   onChange,
-  children,
+  options,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  children: ReactNode;
+  options: SelectFieldOption[];
 }) {
   return (
     <label className="block">
       <span className="mb-1 block text-[11px] font-semibold text-slate-500">{label}</span>
-      <select
+      <SelectField
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-900 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
-      >
-        {children}
-      </select>
+        options={options}
+        onChange={onChange}
+        radius="lg"
+        visualSize="sm"
+      />
     </label>
   );
 }

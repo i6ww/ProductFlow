@@ -1,5 +1,6 @@
 import { ImageToolControls } from "./ImageToolControls";
 import { ImageSizePicker } from "./ImageSizePicker";
+import { SelectField } from "./SelectField";
 import type { ImageSizeOption } from "../lib/imageSizes";
 import { formatImageSizeValue } from "../lib/imageSizes";
 import { useI18n } from "../lib/preferences";
@@ -57,18 +58,15 @@ export function ImageGenerationSettingsPanel({
           {generationCountDescription ? (
             <span className="mb-1.5 block text-[11px] leading-5 text-slate-500">{generationCountDescription}</span>
           ) : null}
-          <select
+          <SelectField
             id="image-generation-count"
-            value={generationCount}
-            onChange={(event) => onGenerationCountChange(Number(event.target.value))}
-            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100"
-          >
-            {generationCountOptions.map((count) => (
-              <option key={count} value={count}>
-                {t("imageSettings.candidateCount", { count })}
-              </option>
-            ))}
-          </select>
+            value={String(generationCount)}
+            options={generationCountOptions.map((count) => ({
+              value: String(count),
+              label: t("imageSettings.candidateCount", { count }),
+            }))}
+            onChange={(nextValue) => onGenerationCountChange(Number(nextValue))}
+          />
         </label>
       ) : null}
       {showToolOptions ? (

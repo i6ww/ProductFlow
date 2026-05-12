@@ -29,6 +29,7 @@ import { ImageGenerationSettingsPanel } from "../components/ImageGenerationSetti
 import { ImageGenerationSettingsTabs, type ImageGenerationSettingsTab } from "../components/ImageGenerationSettingsTabs";
 import { ImageToolControls } from "../components/ImageToolControls";
 import { PromptPreviewDialog, type PromptPreview } from "../components/PromptPreviewDialog";
+import { SelectField } from "../components/SelectField";
 import { TopNav } from "../components/TopNav";
 import { api, ApiError } from "../lib/api";
 import { formatDateTime } from "../lib/format";
@@ -1865,18 +1866,15 @@ function ProductAssociationPanel({
       ) : (
         <label className="block">
           <span className="mb-1.5 block text-xs font-semibold text-slate-700 dark:text-slate-200">{t("chat.targetProduct")}</span>
-          <select
+          <SelectField
             value={targetProductId}
-            onChange={(event) => onTargetProductChange(event.target.value)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:focus:border-violet-400 dark:focus:ring-violet-400/20"
-          >
-            {products.length ? null : <option value="">{t("chat.noProducts")}</option>}
-            {products.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+            options={
+              products.length
+                ? products.map((item) => ({ value: item.id, label: item.name }))
+                : [{ value: "", label: t("chat.noProducts"), disabled: true }]
+            }
+            onChange={onTargetProductChange}
+          />
         </label>
       )}
 

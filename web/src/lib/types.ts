@@ -9,8 +9,10 @@ export type WorkflowNodeType =
   | "reference_image"
   | "copy_generation"
   | "image_generation";
-export type WorkflowNodeStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
+export type WorkflowNodeStatus = "idle" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type WorkflowNodeRunStatusValue = WorkflowNodeStatus;
 export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "cancelled";
+export type WorkflowRetryHint = "retry_later" | "revise_input" | "check_settings";
 export type CanvasTemplateKind = "full_canvas" | "node_group";
 export type CanvasTemplateScenario =
   | "main_image"
@@ -198,6 +200,11 @@ export interface WorkflowNode {
   status: WorkflowNodeStatus;
   output_json: Record<string, unknown> | null;
   failure_reason: string | null;
+  is_retryable: boolean;
+  attempt_count: number;
+  retry_count: number;
+  non_retryable_reason: string | null;
+  retry_hint: WorkflowRetryHint | null;
   last_run_at: string | null;
   created_at: string;
   updated_at: string;
@@ -217,7 +224,7 @@ export interface WorkflowNodeRun {
   id: string;
   workflow_run_id: string;
   node_id: string;
-  status: WorkflowNodeStatus;
+  status: WorkflowNodeRunStatusValue;
   output_json: Record<string, unknown> | null;
   failure_reason: string | null;
   copy_set_id: string | null;
@@ -231,7 +238,7 @@ export interface WorkflowNodeRunStatus {
   id: string;
   workflow_run_id: string;
   node_id: string;
-  status: WorkflowNodeStatus;
+  status: WorkflowNodeRunStatusValue;
   failure_reason: string | null;
   started_at: string;
   finished_at: string | null;
@@ -280,6 +287,11 @@ export interface WorkflowNodeStatusSummary {
   workflow_id: string;
   status: WorkflowNodeStatus;
   failure_reason: string | null;
+  is_retryable: boolean;
+  attempt_count: number;
+  retry_count: number;
+  non_retryable_reason: string | null;
+  retry_hint: WorkflowRetryHint | null;
   last_run_at: string | null;
   updated_at: string;
 }

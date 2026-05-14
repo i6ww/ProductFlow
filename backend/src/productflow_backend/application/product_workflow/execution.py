@@ -37,11 +37,13 @@ from productflow_backend.application.product_workflow.image_generation import (
 from productflow_backend.application.product_workflow.mutations import get_or_create_product_workflow
 from productflow_backend.application.product_workflow.query import WorkflowQueryService
 from productflow_backend.application.product_workflow.run_state import (
+    WORKFLOW_CANCELLED_REASON,
     claim_workflow_node_run,
     mark_workflow_run_cancelled,
     mark_workflow_run_failed,
     requeue_workflow_run_after_capacity_wait,
-    safe_workflow_failure_reason,
+    workflow_node_failed_run_is_retryable,
+    workflow_run_failure_context,
     workflow_run_failure_progress_metadata,
 )
 from productflow_backend.application.product_workflow_dependencies import (
@@ -166,6 +168,16 @@ def start_product_workflow_run(
 ) -> WorkflowRunKickoff:
     workflow = get_or_create_product_workflow(session, product_id)
     ordered_nodes = product_workflow_graph.topological_nodes(workflow)
+    if start_node_id is not None:
+        start_node = next((node for node in workflow.nodes if node.id == start_node_id), None)
+        if start_node is None:
+            raise BusinessValidationError("工作流节点不属于当前商品")
+        if (
+            start_node.status == WorkflowNodeStatus.FAILED
+            and start_node.failure_reason != WORKFLOW_CANCELLED_REASON
+            and not workflow_node_failed_run_is_retryable(start_node, workflow.runs)
+        ):
+            raise BusinessValidationError("该工作流节点不可重试")
     node_ids_to_run = _node_ids_to_run(session, workflow, start_node_id)
     if not node_ids_to_run:
         raise BusinessValidationError("工作流没有可运行节点")
@@ -340,21 +352,21 @@ def execute_product_workflow_run(
             _execute_product_workflow_run(session, run_id=run_id, dependencies=dependencies)
         except TimeLimitExceeded as exc:
             session.rollback()
+            failure = workflow_run_failure_context(exc)
             mark_workflow_run_failed(
                 session,
                 run_id=run_id,
                 failed_node_id=None,
-                reason=safe_workflow_failure_reason(exc)[:1000],
-                is_retryable=getattr(exc, "retryable", True),
+                **failure,
             )
         except Exception as exc:  # noqa: BLE001
             session.rollback()
+            failure = workflow_run_failure_context(exc)
             mark_workflow_run_failed(
                 session,
                 run_id=run_id,
                 failed_node_id=None,
-                reason=safe_workflow_failure_reason(exc)[:1000],
-                is_retryable=getattr(exc, "retryable", True),
+                **failure,
             )
     finally:
         session.close()
@@ -426,22 +438,22 @@ def _execute_product_workflow_run(
             output = _execute_node(session, workflow_id=workflow.id, node=node, dependencies=dependencies)
         except TimeLimitExceeded as exc:
             session.rollback()
+            failure = workflow_run_failure_context(exc)
             mark_workflow_run_failed(
                 session,
                 run_id=run_id,
                 failed_node_id=ordered_node.id,
-                reason=safe_workflow_failure_reason(exc)[:1000],
-                is_retryable=getattr(exc, "retryable", True),
+                **failure,
             )
             return
         except Exception as exc:  # noqa: BLE001
             session.rollback()
+            failure = workflow_run_failure_context(exc)
             mark_workflow_run_failed(
                 session,
                 run_id=run_id,
                 failed_node_id=ordered_node.id,
-                reason=safe_workflow_failure_reason(exc)[:1000],
-                is_retryable=getattr(exc, "retryable", True),
+                **failure,
             )
             return
 

@@ -398,7 +398,12 @@ def update_workflow_node(
     if position_y is not None:
         node.position_y = position_y
     if config_json is not None:
-        node.config_json = _normalize_node_config(node.node_type, config_json)
+        normalized_config = _normalize_node_config(node.node_type, config_json)
+        config_changed = normalized_config != (node.config_json or {})
+        node.config_json = normalized_config
+        if config_changed and node.status == WorkflowNodeStatus.FAILED:
+            node.status = WorkflowNodeStatus.IDLE
+            node.failure_reason = None
     node.workflow.updated_at = now_utc()
     session.commit()
     session.expire_all()

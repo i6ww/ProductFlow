@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,10 @@ from productflow_backend.application.canvas_templates import (
     TemplateKind,
 )
 from productflow_backend.application.product_workflow.graph import ProductWorkflowStatusSnapshot
+from productflow_backend.application.product_workflow.run_state import (
+    WORKFLOW_CANCELLED_REASON,
+    workflow_node_failed_run_is_retryable,
+)
 from productflow_backend.application.product_workflows import latest_workflow_runs
 from productflow_backend.domain.durable_generation_tasks import WORKFLOW_RUN_GENERATION_TASK_CONTRACT
 from productflow_backend.domain.enums import WorkflowNodeStatus, WorkflowNodeType, WorkflowRunStatus
@@ -23,6 +27,9 @@ from productflow_backend.infrastructure.db.models import (
     WorkflowRun,
 )
 
+WorkflowNodeDisplayStatus = WorkflowNodeStatus | Literal["cancelled"]
+WorkflowRetryHint = Literal["retry_later", "revise_input", "check_settings"]
+
 
 class WorkflowNodeResponse(BaseModel):
     id: str
@@ -32,9 +39,14 @@ class WorkflowNodeResponse(BaseModel):
     position_x: int
     position_y: int
     config_json: dict[str, Any]
-    status: WorkflowNodeStatus
+    status: WorkflowNodeDisplayStatus
     output_json: dict[str, Any] | None = None
     failure_reason: str | None = None
+    is_retryable: bool
+    attempt_count: int
+    retry_count: int
+    non_retryable_reason: str | None = None
+    retry_hint: WorkflowRetryHint | None = None
     last_run_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -54,7 +66,7 @@ class WorkflowNodeRunResponse(BaseModel):
     id: str
     workflow_run_id: str
     node_id: str
-    status: WorkflowNodeStatus
+    status: WorkflowNodeDisplayStatus
     output_json: dict[str, Any] | None = None
     failure_reason: str | None = None
     copy_set_id: str | None = None
@@ -68,7 +80,7 @@ class WorkflowNodeRunStatusResponse(BaseModel):
     id: str
     workflow_run_id: str
     node_id: str
-    status: WorkflowNodeStatus
+    status: WorkflowNodeDisplayStatus
     failure_reason: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
@@ -115,8 +127,13 @@ class WorkflowRunStatusResponse(BaseModel):
 class WorkflowNodeStatusResponse(BaseModel):
     id: str
     workflow_id: str
-    status: WorkflowNodeStatus
+    status: WorkflowNodeDisplayStatus
     failure_reason: str | None = None
+    is_retryable: bool
+    attempt_count: int
+    retry_count: int
+    non_retryable_reason: str | None = None
+    retry_hint: WorkflowRetryHint | None = None
     last_run_at: datetime | None = None
     updated_at: datetime
 
@@ -295,7 +312,96 @@ def workflow_run_queue_fields(run: WorkflowRun) -> dict[str, int | None]:
     }
 
 
-def serialize_workflow_node(node: WorkflowNode) -> WorkflowNodeResponse:
+def workflow_node_display_status(node: WorkflowNode) -> WorkflowNodeDisplayStatus:
+    if node.status == WorkflowNodeStatus.FAILED and node.failure_reason == WORKFLOW_CANCELLED_REASON:
+        return "cancelled"
+    return node.status
+
+
+def workflow_node_run_display_status(node_run: WorkflowNodeRun) -> WorkflowNodeDisplayStatus:
+    run = node_run.workflow_run
+    if (
+        run is not None
+        and run.status == WorkflowRunStatus.CANCELLED
+        and node_run.status == WorkflowNodeStatus.FAILED
+        and node_run.failure_reason == WORKFLOW_CANCELLED_REASON
+    ):
+        return "cancelled"
+    return node_run.status
+
+
+def _workflow_retry_hint(value: Any) -> WorkflowRetryHint | None:
+    if value in {"retry_later", "revise_input", "check_settings"}:
+        return value
+    return None
+
+
+def _workflow_run_retry_hint(run: WorkflowRun) -> WorkflowRetryHint | None:
+    metadata = run.progress_metadata if isinstance(run.progress_metadata, dict) else {}
+    return _workflow_retry_hint(metadata.get("retry_hint"))
+
+
+def _workflow_run_failure_reason(run: WorkflowRun) -> str | None:
+    metadata = run.progress_metadata if isinstance(run.progress_metadata, dict) else {}
+    reason = metadata.get("last_failure_reason")
+    return reason if isinstance(reason, str) and reason.strip() else run.failure_reason
+
+
+def _workflow_node_attempt_runs(
+    node: WorkflowNode,
+    runs: list[WorkflowRun],
+) -> list[tuple[WorkflowRun, WorkflowNodeRun]]:
+    ordered_runs = sorted(runs, key=lambda item: (item.started_at, item.id))
+    attempts: list[tuple[WorkflowRun, WorkflowNodeRun]] = []
+    for run in ordered_runs:
+        for node_run in run.node_runs:
+            if node_run.node_id != node.id:
+                continue
+            if node_run.failure_reason == "上游节点失败":
+                continue
+            attempts.append((run, node_run))
+            break
+    return attempts
+
+
+def workflow_node_attempt_count(node: WorkflowNode, runs: list[WorkflowRun]) -> int:
+    return len(_workflow_node_attempt_runs(node, runs))
+
+
+def workflow_node_retry_count(node: WorkflowNode, runs: list[WorkflowRun]) -> int:
+    return max(0, workflow_node_attempt_count(node, runs) - 1)
+
+
+def workflow_node_latest_failed_run(node: WorkflowNode, runs: list[WorkflowRun]) -> WorkflowRun | None:
+    attempts = _workflow_node_attempt_runs(node, runs)
+    for run, node_run in reversed(attempts):
+        if run.status == WorkflowRunStatus.FAILED and node_run.status == WorkflowNodeStatus.FAILED:
+            return run
+    return None
+
+
+def workflow_node_non_retryable_reason(node: WorkflowNode, runs: list[WorkflowRun]) -> str | None:
+    if node.status != WorkflowNodeStatus.FAILED:
+        return None
+    if workflow_node_failed_run_is_retryable(node, runs):
+        return None
+    failed_run = workflow_node_latest_failed_run(node, runs)
+    if failed_run is None:
+        return node.failure_reason
+    return _workflow_run_failure_reason(failed_run)
+
+
+def workflow_node_retry_hint(node: WorkflowNode, runs: list[WorkflowRun]) -> WorkflowRetryHint | None:
+    if node.status != WorkflowNodeStatus.FAILED:
+        return None
+    failed_run = workflow_node_latest_failed_run(node, runs)
+    if failed_run is None:
+        return None
+    return _workflow_run_retry_hint(failed_run)
+
+
+def serialize_workflow_node(node: WorkflowNode, runs: list[WorkflowRun] | None = None) -> WorkflowNodeResponse:
+    context_runs = runs or []
     return WorkflowNodeResponse(
         id=node.id,
         workflow_id=node.workflow_id,
@@ -304,9 +410,14 @@ def serialize_workflow_node(node: WorkflowNode) -> WorkflowNodeResponse:
         position_x=node.position_x,
         position_y=node.position_y,
         config_json=node.config_json,
-        status=node.status,
+        status=workflow_node_display_status(node),
         output_json=node.output_json,
         failure_reason=node.failure_reason,
+        is_retryable=workflow_node_failed_run_is_retryable(node, context_runs),
+        attempt_count=workflow_node_attempt_count(node, context_runs),
+        retry_count=workflow_node_retry_count(node, context_runs),
+        non_retryable_reason=workflow_node_non_retryable_reason(node, context_runs),
+        retry_hint=workflow_node_retry_hint(node, context_runs),
         last_run_at=node.last_run_at,
         created_at=node.created_at,
         updated_at=node.updated_at,
@@ -330,7 +441,7 @@ def serialize_workflow_node_run(node_run: WorkflowNodeRun) -> WorkflowNodeRunRes
         id=node_run.id,
         workflow_run_id=node_run.workflow_run_id,
         node_id=node_run.node_id,
-        status=node_run.status,
+        status=workflow_node_run_display_status(node_run),
         output_json=node_run.output_json,
         failure_reason=node_run.failure_reason,
         copy_set_id=node_run.copy_set_id,
@@ -346,7 +457,7 @@ def serialize_workflow_node_run_status(node_run: WorkflowNodeRun) -> WorkflowNod
         id=node_run.id,
         workflow_run_id=node_run.workflow_run_id,
         node_id=node_run.node_id,
-        status=node_run.status,
+        status=workflow_node_run_display_status(node_run),
         failure_reason=node_run.failure_reason,
         started_at=node_run.started_at,
         finished_at=node_run.finished_at,
@@ -390,14 +501,16 @@ def serialize_workflow_run_status(run: WorkflowRun) -> WorkflowRunStatusResponse
 def serialize_product_workflow(workflow: ProductWorkflow) -> ProductWorkflowResponse:
     nodes = sorted(workflow.nodes, key=lambda item: (item.position_x, item.position_y, item.created_at))
     edges = sorted(workflow.edges, key=lambda item: item.created_at)
+    runs = latest_workflow_runs(workflow)
+    node_context_runs = list(workflow.runs)
     return ProductWorkflowResponse(
         id=workflow.id,
         product_id=workflow.product_id,
         title=workflow.title,
         active=workflow.active,
-        nodes=[serialize_workflow_node(item) for item in nodes],
+        nodes=[serialize_workflow_node(item, node_context_runs) for item in nodes],
         edges=[serialize_workflow_edge(item) for item in edges],
-        runs=[serialize_workflow_run(item) for item in latest_workflow_runs(workflow)],
+        runs=[serialize_workflow_run(item) for item in runs],
         created_at=workflow.created_at,
         updated_at=workflow.updated_at,
     )
@@ -498,8 +611,13 @@ def serialize_product_workflow_status(snapshot: ProductWorkflowStatusSnapshot) -
             WorkflowNodeStatusResponse(
                 id=item.id,
                 workflow_id=item.workflow_id,
-                status=item.status,
+                status=workflow_node_display_status(item),
                 failure_reason=item.failure_reason,
+                is_retryable=workflow_node_failed_run_is_retryable(item, snapshot.node_context_runs),
+                attempt_count=workflow_node_attempt_count(item, snapshot.node_context_runs),
+                retry_count=workflow_node_retry_count(item, snapshot.node_context_runs),
+                non_retryable_reason=workflow_node_non_retryable_reason(item, snapshot.node_context_runs),
+                retry_hint=workflow_node_retry_hint(item, snapshot.node_context_runs),
                 last_run_at=item.last_run_at,
                 updated_at=item.updated_at,
             )

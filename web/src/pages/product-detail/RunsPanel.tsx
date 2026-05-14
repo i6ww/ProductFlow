@@ -179,7 +179,13 @@ export function RunsPanel({ workflow, latestRun, busyRunId, onRetryRun }: RunsPa
                               </span>
                             </div>
                             {nodeRun.failure_reason ? (
-                              <div className="mt-2 line-clamp-2 rounded-lg border border-red-100 bg-red-50 px-2 py-1 text-[11px] leading-5 text-red-700 dark:border-red-400/35 dark:bg-red-500/10 dark:text-red-200">
+                              <div
+                                className={`mt-2 line-clamp-2 rounded-lg border px-2 py-1 text-[11px] leading-5 ${
+                                  nodeRun.status === "cancelled"
+                                    ? "border-zinc-100 bg-zinc-50 text-zinc-600 dark:border-slate-700 dark:bg-[#0b1220] dark:text-slate-300"
+                                    : "border-red-100 bg-red-50 text-red-700 dark:border-red-400/35 dark:bg-red-500/10 dark:text-red-200"
+                                }`}
+                              >
                                 {nodeRun.failure_reason}
                               </div>
                             ) : null}

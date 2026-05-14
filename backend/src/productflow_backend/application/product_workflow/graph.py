@@ -32,6 +32,7 @@ class ProductWorkflowStatusSnapshot:
     workflow: ProductWorkflow
     nodes: list[WorkflowNode]
     runs: list[WorkflowRun]
+    node_context_runs: list[WorkflowRun]
 
 
 def workflow_query():
@@ -159,8 +160,41 @@ def get_active_workflow_status(session: Session, product_id: str) -> ProductWork
             .limit(10)
         )
     )
+    node_context_runs = list(
+        session.scalars(
+            select(WorkflowRun)
+            .options(
+                load_only(
+                    WorkflowRun.id,
+                    WorkflowRun.workflow_id,
+                    WorkflowRun.status,
+                    WorkflowRun.started_at,
+                    WorkflowRun.finished_at,
+                    WorkflowRun.failure_reason,
+                    WorkflowRun.is_retryable,
+                    WorkflowRun.progress_metadata,
+                ),
+                selectinload(WorkflowRun.node_runs).load_only(
+                    WorkflowNodeRun.id,
+                    WorkflowNodeRun.workflow_run_id,
+                    WorkflowNodeRun.node_id,
+                    WorkflowNodeRun.status,
+                    WorkflowNodeRun.failure_reason,
+                    WorkflowNodeRun.started_at,
+                    WorkflowNodeRun.finished_at,
+                ),
+            )
+            .where(WorkflowRun.workflow_id == workflow.id)
+            .order_by(desc(WorkflowRun.started_at), desc(WorkflowRun.id))
+        )
+    )
     attach_workflow_run_queue_metadata(session, runs)
-    return ProductWorkflowStatusSnapshot(workflow=workflow, nodes=nodes, runs=runs)
+    return ProductWorkflowStatusSnapshot(
+        workflow=workflow,
+        nodes=nodes,
+        runs=runs,
+        node_context_runs=node_context_runs,
+    )
 
 
 def get_node_or_raise(session: Session, node_id: str) -> WorkflowNode:

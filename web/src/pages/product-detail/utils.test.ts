@@ -17,6 +17,7 @@ import {
   workflowNodeRunProviderSummary,
   workflowNodeRunStatusLabel,
   workflowNodeStatusLabel,
+  workflowRetryHintLabel,
   workflowRunQueueText,
   workflowRunRetryMetadata,
 } from "./utils";
@@ -32,6 +33,11 @@ const baseNode: WorkflowNode = {
   status: "idle",
   output_json: null,
   failure_reason: null,
+  is_retryable: false,
+  attempt_count: 0,
+  retry_count: 0,
+  non_retryable_reason: null,
+  retry_hint: null,
   last_run_at: null,
   created_at: "2026-04-26T00:00:00Z",
   updated_at: "2026-04-26T00:00:00Z",
@@ -168,6 +174,14 @@ describe("product-detail utils", () => {
         }),
       ),
     ).toBe("上次失败：图片供应商拒绝了本次内容。正在重试。 排队第 1 位，前方 0 个；全局活跃 1/3。");
+    expect(
+      workflowRetryHintLabel(
+        "revise_input",
+        stubT({
+          "detail.retryHint.reviseInput": "调整输入后再运行",
+        }),
+      ),
+    ).toBe("调整输入后再运行");
   });
 
   it("scopes visible image waiting state to image-generation and reference nodes", () => {
@@ -190,6 +204,7 @@ describe("product-detail utils", () => {
     expect(workflowNodeActivityText({ ...baseNode, node_type: "copy_generation", status: "running" })).toBe("节点正在运行");
     expect(workflowNodeActivityText({ ...baseNode, node_type: "copy_generation", status: "idle" })).toBe("");
     expect(workflowNodeRunStatusLabel("failed")).toBe("失败");
+    expect(workflowNodeRunStatusLabel("cancelled")).toBe("已取消");
     expect(
       workflowNodeActivityText(
         { ...baseNode, node_type: "copy_generation", status: "running" },
@@ -214,7 +229,12 @@ describe("product-detail utils", () => {
     });
 
     for (const status of ["idle", "succeeded", "failed"] as const) {
-      expect(getWorkflowNodeRunActionState({ ...baseNode, id: `node-${status}`, status }, idleOptions)).toMatchObject({
+      expect(
+        getWorkflowNodeRunActionState(
+          { ...baseNode, id: `node-${status}`, status, is_retryable: status === "failed" },
+          idleOptions,
+        ),
+      ).toMatchObject({
         disabled: false,
         pending: false,
         label: status === "failed" ? "重试" : "运行",
@@ -256,7 +276,7 @@ describe("product-detail utils", () => {
 
     expect(
       getWorkflowNodeRunActionState(
-        { ...baseNode, id: "node-en", status: "failed" },
+        { ...baseNode, id: "node-en", status: "failed", is_retryable: true },
         idleOptions,
         stubT({
           "detail.retry": "Retry",
@@ -268,6 +288,28 @@ describe("product-detail utils", () => {
       pending: false,
       label: "Retry",
       title: "Run this node again",
+    });
+
+    expect(
+      getWorkflowNodeRunActionState(
+        { ...baseNode, id: "node-nonretryable", status: "failed", is_retryable: false },
+        idleOptions,
+      ),
+    ).toMatchObject({
+      disabled: true,
+      pending: false,
+      label: "不可原样重试",
+    });
+
+    expect(
+      getWorkflowNodeRunActionState(
+        { ...baseNode, id: "node-cancelled", status: "cancelled", is_retryable: false },
+        idleOptions,
+      ),
+    ).toMatchObject({
+      disabled: false,
+      pending: false,
+      label: "运行",
     });
   });
 
@@ -504,6 +546,11 @@ describe("product-detail utils", () => {
           workflow_id: "workflow-1",
           status: "failed",
           failure_reason: "生成失败",
+          is_retryable: false,
+          attempt_count: 2,
+          retry_count: 1,
+          non_retryable_reason: "生成失败",
+          retry_hint: "revise_input",
           last_run_at: "2026-04-26T00:02:00Z",
           updated_at: "2026-04-26T00:02:01Z",
         },
@@ -536,6 +583,11 @@ describe("product-detail utils", () => {
     expect(merged.nodes[0].output_json).toEqual({ copy_set_id: "copy-1" });
     expect(merged.nodes[0].status).toBe("failed");
     expect(merged.nodes[0].failure_reason).toBe("生成失败");
+    expect(merged.nodes[0].is_retryable).toBe(false);
+    expect(merged.nodes[0].attempt_count).toBe(2);
+    expect(merged.nodes[0].retry_count).toBe(1);
+    expect(merged.nodes[0].non_retryable_reason).toBe("生成失败");
+    expect(merged.nodes[0].retry_hint).toBe("revise_input");
     expect(merged.runs[0].status).toBe("failed");
     expect(merged.runs[0].node_runs[0].output_json).toEqual({ artifact: "keep output" });
     expect(merged.runs[0].node_runs[0].copy_set_id).toBe("copy-1");
@@ -564,6 +616,11 @@ describe("product-detail utils", () => {
             workflow_id: "workflow-1",
             status: "succeeded",
             failure_reason: null,
+            is_retryable: false,
+            attempt_count: 1,
+            retry_count: 0,
+            non_retryable_reason: null,
+            retry_hint: null,
             last_run_at: "2026-04-26T00:02:00Z",
             updated_at: "2026-04-26T00:02:00Z",
           },
@@ -595,6 +652,11 @@ describe("product-detail utils", () => {
             workflow_id: "workflow-1",
             status: "running",
             failure_reason: null,
+            is_retryable: false,
+            attempt_count: 1,
+            retry_count: 0,
+            non_retryable_reason: null,
+            retry_hint: null,
             last_run_at: "2026-04-26T00:01:00Z",
             updated_at: "2026-04-26T00:01:30Z",
           },

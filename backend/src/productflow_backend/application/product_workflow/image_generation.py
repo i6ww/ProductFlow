@@ -290,7 +290,12 @@ def generate_workflow_images_concurrently(
                     type(exc).__name__,
                 )
                 decision = classify_image_generation_failure(exc, generic_message=WORKFLOW_IMAGE_GENERATION_FAILURE)
-                raise WorkflowImageGenerationProviderError(decision.reason, retryable=decision.retryable) from exc
+                raise WorkflowImageGenerationProviderError(
+                    decision.reason,
+                    retryable=decision.retryable,
+                    retry_hint=decision.retry_hint,
+                    failure_category=decision.category,
+                ) from exc
             return GeneratedWorkflowImage(
                 target_index=target_index,
                 content=generated_image.bytes_data,

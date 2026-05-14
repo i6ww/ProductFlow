@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -106,27 +107,35 @@ def _contains_value(value: object, expected: object) -> bool:
     return False
 
 
-def test_product_workflow_status_endpoint_returns_lightweight_state(configured_env: Path) -> None:
-    from productflow_backend.presentation.api import create_app
-
-    app = create_app()
-    client = TestClient(app)
-    _login(client)
-
-    created = client.post(
-        "/api/products",
-        data={"name": "桌面收纳盒"},
-        files={"image": ("box.png", _make_demo_image_bytes(), "image/png")},
+def test_product_workflow_status_endpoint_returns_lightweight_state(db_session) -> None:
+    from productflow_backend.application.product_workflows import (
+        get_or_create_product_workflow,
+        get_product_workflow_status,
+        run_product_workflow,
     )
-    assert created.status_code == 201
-    product_id = created.json()["id"]
+    from productflow_backend.application.use_cases import create_product
+    from productflow_backend.presentation.schemas.product_workflows import (
+        serialize_product_workflow,
+        serialize_product_workflow_status,
+    )
 
-    workflow_response = client.get(f"/api/products/{product_id}/workflow")
-    assert workflow_response.status_code == 200
-    workflow = workflow_response.json()
-    status_response = client.get(f"/api/products/{product_id}/workflow/status")
-    assert status_response.status_code == 200
-    status_payload = status_response.json()
+    product = create_product(
+        db_session,
+        name="桌面收纳盒",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="box.png",
+        content_type="image/png",
+    )
+    product_id = product.id
+
+    persisted_workflow = get_or_create_product_workflow(db_session, product_id)
+    workflow = serialize_product_workflow(persisted_workflow).model_dump(mode="json")
+    status_payload = serialize_product_workflow_status(
+        get_product_workflow_status(db_session, product_id)
+    ).model_dump(mode="json")
     assert status_payload["id"] == workflow["id"]
     assert status_payload["product_id"] == product_id
     assert status_payload["title"] == workflow["title"]
@@ -139,15 +148,51 @@ def test_product_workflow_status_endpoint_returns_lightweight_state(configured_e
         "workflow_id",
         "status",
         "failure_reason",
+        "is_retryable",
+        "attempt_count",
+        "retry_count",
+        "non_retryable_reason",
+        "retry_hint",
         "last_run_at",
         "updated_at",
     }
+    counted_node = persisted_workflow.nodes[0]
+    base_started_at = datetime(2026, 5, 14, 0, 0)
+    for index in range(11):
+        run = WorkflowRun(
+            workflow_id=persisted_workflow.id,
+            status=WorkflowRunStatus.FAILED,
+            started_at=base_started_at + timedelta(minutes=index),
+            finished_at=base_started_at + timedelta(minutes=index, seconds=30),
+            failure_reason=f"历史失败 {index}",
+            is_retryable=True,
+        )
+        db_session.add(run)
+        db_session.flush()
+        db_session.add(
+            WorkflowNodeRun(
+                workflow_run_id=run.id,
+                node_id=counted_node.id,
+                status=WorkflowNodeStatus.FAILED,
+                failure_reason=f"历史失败 {index}",
+                started_at=run.started_at,
+                finished_at=run.finished_at,
+            )
+        )
+    db_session.commit()
+    status_with_history = serialize_product_workflow_status(
+        get_product_workflow_status(db_session, product_id)
+    ).model_dump(mode="json")
+    counted_node_payload = next(node for node in status_with_history["nodes"] if node["id"] == counted_node.id)
+    assert len(status_with_history["runs"]) == 10
+    assert counted_node_payload["attempt_count"] == 11
+    assert counted_node_payload["retry_count"] == 10
 
-    run_response = client.post(f"/api/products/{product_id}/workflow/run", json={})
-    assert run_response.status_code == 200
-    run_status_response = client.get(f"/api/products/{product_id}/workflow/status")
-    assert run_status_response.status_code == 200
-    run_status_payload = run_status_response.json()
+    run_product_workflow(db_session, product_id=product_id)
+    db_session.expire_all()
+    run_status_payload = serialize_product_workflow_status(
+        get_product_workflow_status(db_session, product_id)
+    ).model_dump(mode="json")
     assert run_status_payload["runs"]
     assert set(run_status_payload["runs"][0]) == {
         "id",

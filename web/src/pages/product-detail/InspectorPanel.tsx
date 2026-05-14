@@ -47,6 +47,7 @@ import {
   outputText,
   statusClass,
   workflowNodeActivityText,
+  workflowRetryHintLabel,
   workflowNodeStatusLabel,
   workflowRunQueueText,
 } from "./utils";
@@ -362,11 +363,35 @@ export function InspectorPanel({
         ) : null}
       </section>
       {node.failure_reason ? (
-        <section className="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs leading-relaxed text-red-700 shadow-sm dark:border-red-400/35 dark:bg-red-500/10 dark:text-red-200">
+        <section
+          className={`rounded-2xl border p-4 text-xs leading-relaxed shadow-sm ${
+            node.status === "cancelled"
+              ? "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-slate-700 dark:bg-[#0b1220] dark:text-slate-300"
+              : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/35 dark:bg-red-500/10 dark:text-red-200"
+          }`}
+        >
           <AlertCircle size={13} className="mr-1.5 inline" />
           {node.failure_reason}
-          {!runActionState.disabled && node.node_type !== "product_context" ? (
+          {node.status === "failed" && node.is_retryable && node.node_type !== "product_context" ? (
             <div className="mt-2 font-semibold text-red-700 dark:text-red-100">{t("detail.inspector.retryableCurrent")}</div>
+          ) : null}
+          {node.status === "failed" && !node.is_retryable ? (
+            <div className="mt-2 font-semibold text-red-700 dark:text-red-100">{t("detail.notRetryable")}</div>
+          ) : null}
+          {node.attempt_count > 0 ? (
+            <div className="mt-2 text-[11px] text-red-700/85 dark:text-red-100/85">
+              {t("detail.nodeAttemptSummary", { attempts: node.attempt_count, retries: node.retry_count })}
+            </div>
+          ) : null}
+          {node.status === "failed" && !node.is_retryable && node.non_retryable_reason ? (
+            <div className="mt-1 text-[11px] text-red-700/85 dark:text-red-100/85">
+              {t("detail.nonRetryableReason", { reason: node.non_retryable_reason })}
+            </div>
+          ) : null}
+          {node.status === "failed" && node.retry_hint ? (
+            <div className="mt-1 text-[11px] text-red-700/85 dark:text-red-100/85">
+              {workflowRetryHintLabel(node.retry_hint, t)}
+            </div>
           ) : null}
         </section>
       ) : null}

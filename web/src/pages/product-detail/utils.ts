@@ -4,6 +4,7 @@ import type {
   ProductWorkflowStatus,
   WorkflowNode,
   WorkflowNodeRun,
+  WorkflowRetryHint,
   WorkflowRun,
 } from "../../lib/types";
 import { workflowNodeDisplayTitle } from "./nodeDisplay";
@@ -18,6 +19,7 @@ const NODE_STATUS_LABEL_KEYS: Record<WorkflowNode["status"], TranslationKey> = {
   running: "detail.nodeStatus.running",
   succeeded: "detail.nodeStatus.succeeded",
   failed: "detail.nodeStatus.failed",
+  cancelled: "detail.nodeStatus.cancelled",
 };
 
 export interface WorkflowNodeRunActionState {
@@ -36,10 +38,16 @@ export interface WorkflowRunRetryMetadata {
   last_failure_reason?: string;
   last_failure_category?: string;
   last_failure_retryable?: boolean;
-  retry_hint?: "retry_later" | "revise_input" | "check_settings";
+  retry_hint?: WorkflowRetryHint;
   source_run_id?: string;
   manual_retry?: boolean;
 }
+
+const WORKFLOW_RETRY_HINT_LABEL_KEYS: Record<WorkflowRetryHint, TranslationKey> = {
+  retry_later: "detail.retryHint.retryLater",
+  revise_input: "detail.retryHint.reviseInput",
+  check_settings: "detail.retryHint.checkSettings",
+};
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -84,6 +92,7 @@ export function statusClass(status: WorkflowNode["status"]): string {
     running: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-100",
     succeeded: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/50 dark:bg-emerald-400/15 dark:text-emerald-50",
     failed: "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-100",
+    cancelled: "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-slate-700 dark:bg-[#0b1220] dark:text-slate-300",
   }[status];
 }
 
@@ -165,6 +174,14 @@ export function getWorkflowNodeRunActionState(
       pending: pendingThisNode,
       label: pendingThisNode ? t("detail.runAction.submitting") : t("detail.run"),
       title: pendingThisNode ? t("detail.runAction.submittingTitle") : t("detail.runAction.otherSubmittingTitle"),
+    };
+  }
+  if (node.status === "failed" && !node.is_retryable) {
+    return {
+      disabled: true,
+      pending: false,
+      label: t("detail.notRetryable"),
+      title: t("detail.notRetryable"),
     };
   }
   return {
@@ -267,6 +284,10 @@ export function workflowRunRetryMetadata(run: Pick<WorkflowRun, "progress_metada
     output.manual_retry = metadata.manual_retry;
   }
   return Object.keys(output).length ? output : null;
+}
+
+export function workflowRetryHintLabel(hint: WorkflowRetryHint | null | undefined, t: TranslateFunction = defaultT): string {
+  return hint ? t(WORKFLOW_RETRY_HINT_LABEL_KEYS[hint]) : "";
 }
 
 export function workflowNodeRunDurationText(
@@ -402,6 +423,11 @@ export function mergeProductWorkflowStatusIntoDetail(
         ...node,
         status: nodeStatus.status,
         failure_reason: nodeStatus.failure_reason,
+        is_retryable: nodeStatus.is_retryable,
+        attempt_count: nodeStatus.attempt_count,
+        retry_count: nodeStatus.retry_count,
+        non_retryable_reason: nodeStatus.non_retryable_reason,
+        retry_hint: nodeStatus.retry_hint,
         last_run_at: nodeStatus.last_run_at,
         updated_at: nodeStatus.updated_at,
       };

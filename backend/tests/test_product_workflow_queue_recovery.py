@@ -318,41 +318,44 @@ def test_workflow_run_cancel_marks_active_run_cancelled_and_worker_noops(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from productflow_backend.application.product_workflows import execute_product_workflow_run
-    from productflow_backend.presentation.api import create_app
-
-    monkeypatch.setattr(
-        "productflow_backend.application.product_workflow.execution.enqueue_workflow_run",
-        lambda run_id: None,
+    from productflow_backend.application.product_workflows import (
+        cancel_product_workflow_run,
+        execute_product_workflow_run,
+        start_product_workflow_run,
     )
+    from productflow_backend.presentation.schemas.product_workflows import serialize_product_workflow
+
     monkeypatch.setattr(
         "productflow_backend.application.product_workflow.execution._execute_node",
         lambda *args, **kwargs: pytest.fail("cancelled workflow run must no-op"),
     )
-    app = create_app()
-    client = TestClient(app)
-    _login(client)
 
-    created = client.post(
-        "/api/products",
-        data={"name": "取消工作流商品"},
-        files={"image": ("workflow.png", _make_demo_image_bytes(), "image/png")},
+    product = create_product(
+        db_session,
+        name="取消工作流商品",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="workflow.png",
+        content_type="image/png",
     )
-    assert created.status_code == 201
-    product_id = created.json()["id"]
-    submitted = client.post(f"/api/products/{product_id}/workflow/run", json={})
-    assert submitted.status_code == 200
-    run_id = submitted.json()["runs"][0]["id"]
+    kickoff = start_product_workflow_run(db_session, product_id=product.id)
+    run_id = kickoff.run_id
 
-    cancelled = client.post(f"/api/products/{product_id}/workflow/runs/{run_id}/cancel")
-    assert cancelled.status_code == 200
-    run_payload = cancelled.json()["runs"][0]
+    cancelled_workflow = cancel_product_workflow_run(db_session, product_id=product.id, run_id=run_id)
+    cancelled_payload = serialize_product_workflow(cancelled_workflow).model_dump(mode="json")
+    run_payload = cancelled_payload["runs"][0]
     assert run_payload["id"] == run_id
     assert run_payload["status"] == "cancelled"
     assert run_payload["failure_reason"] == "已取消"
     assert run_payload["is_cancelable"] is False
     assert run_payload["is_retryable"] is False
-    assert all(node["status"] not in {"queued", "running"} for node in cancelled.json()["nodes"])
+    assert run_payload["node_runs"]
+    assert {node_run["status"] for node_run in run_payload["node_runs"]} == {"cancelled"}
+    assert {node_run["failure_reason"] for node_run in run_payload["node_runs"]} == {"已取消"}
+    assert all(node["status"] not in {"queued", "running"} for node in cancelled_payload["nodes"])
+    assert all(node["is_retryable"] is False for node in cancelled_payload["nodes"])
 
     execute_product_workflow_run(run_id)
     db_session.expire_all()
@@ -563,6 +566,7 @@ def test_product_workflow_worker_defers_queued_run_when_global_running_capacity_
         PRODUCT_WORKFLOW_CAPACITY_RETRY_DELAY_MS,
     )
     from productflow_backend.application.product_workflows import (
+        cancel_product_workflow_run,
         execute_product_workflow_run,
         start_product_workflow_run,
     )
@@ -627,6 +631,19 @@ def test_product_workflow_worker_defers_queued_run_when_global_running_capacity_
     assert persisted_node_run.finished_at is None
     assert persisted_node is not None
     assert persisted_node.status == WorkflowNodeStatus.QUEUED
+    assert delayed_requeues == [(queued.run_id, PRODUCT_WORKFLOW_CAPACITY_RETRY_DELAY_MS)]
+
+    cancel_product_workflow_run(db_session, product_id=queued_product.id, run_id=queued.run_id)
+    execute_product_workflow_run(queued.run_id)
+
+    db_session.expire_all()
+    cancelled_run = db_session.get(WorkflowRun, queued.run_id)
+    cancelled_node_run = db_session.get(WorkflowNodeRun, queued_node_run.id)
+    assert cancelled_run is not None
+    assert cancelled_run.status == WorkflowRunStatus.CANCELLED
+    assert cancelled_node_run is not None
+    assert cancelled_node_run.status == WorkflowNodeStatus.FAILED
+    assert cancelled_node_run.failure_reason == "已取消"
     assert delayed_requeues == [(queued.run_id, PRODUCT_WORKFLOW_CAPACITY_RETRY_DELAY_MS)]
 
 
@@ -819,6 +836,7 @@ def test_workflow_image_generation_provider_failure_exposes_safe_detail(
 ) -> None:
     from productflow_backend.application.product_workflow_dependencies import WorkflowExecutionDependencies
     from productflow_backend.application.product_workflows import run_product_workflow
+    from productflow_backend.presentation.schemas.product_workflows import serialize_product_workflow
 
     db_session.add(AppSetting(key="poster_generation_mode", value="generated"))
     db_session.commit()
@@ -852,6 +870,12 @@ def test_workflow_image_generation_provider_failure_exposes_safe_detail(
     assert run is not None
     assert run.status == WorkflowRunStatus.FAILED
     assert run.failure_reason == "图片生成失败：image2 不支持 64x64，最小尺寸为 512x512"
+    assert run.progress_metadata == {
+        "last_failure_reason": "图片生成失败：image2 不支持 64x64，最小尺寸为 512x512",
+        "last_failure_retryable": False,
+        "retry_hint": "check_settings",
+        "last_failure_category": "unsupported_parameters",
+    }
 
     image_node = db_session.query(WorkflowNode).filter_by(
         workflow_id=workflow.id,
@@ -859,6 +883,10 @@ def test_workflow_image_generation_provider_failure_exposes_safe_detail(
     ).one()
     assert image_node.status == WorkflowNodeStatus.FAILED
     assert image_node.failure_reason == run.failure_reason
+    payload = serialize_product_workflow(workflow).model_dump(mode="json")
+    image_node_payload = next(node for node in payload["nodes"] if node["id"] == image_node.id)
+    assert image_node_payload["retry_hint"] == "check_settings"
+    assert image_node_payload["non_retryable_reason"] == run.failure_reason
 
 
 def test_workflow_image_generation_provider_failure_categorizes_wrapped_rate_limit(
@@ -908,7 +936,13 @@ def test_workflow_image_generation_policy_reject_is_not_retryable(
     configured_env: Path,
 ) -> None:
     from productflow_backend.application.product_workflow_dependencies import WorkflowExecutionDependencies
-    from productflow_backend.application.product_workflows import run_product_workflow
+    from productflow_backend.application.product_workflows import (
+        run_product_workflow,
+        start_product_workflow_run,
+        update_workflow_node,
+    )
+    from productflow_backend.domain.errors import BusinessValidationError
+    from productflow_backend.presentation.schemas.product_workflows import serialize_product_workflow
 
     db_session.add(AppSetting(key="poster_generation_mode", value="generated"))
     db_session.commit()
@@ -947,7 +981,50 @@ def test_workflow_image_generation_policy_reject_is_not_retryable(
         "last_failure_reason": "图片供应商拒绝了本次内容或安全策略，请调整提示词或参考图后重试",
         "last_failure_retryable": False,
         "retry_hint": "revise_input",
+        "last_failure_category": "content_policy",
     }
+
+    failed_node_run = next(
+        node_run
+        for node_run in run.node_runs
+        if node_run.status == WorkflowNodeStatus.FAILED and node_run.failure_reason == run.failure_reason
+    )
+
+    workflow_payload = serialize_product_workflow(workflow).model_dump(mode="json")
+    failed_node_payload = next(node for node in workflow_payload["nodes"] if node["id"] == failed_node_run.node_id)
+    assert failed_node_payload["status"] == "failed"
+    assert failed_node_payload["is_retryable"] is False
+    assert failed_node_payload["attempt_count"] == 1
+    assert failed_node_payload["retry_count"] == 0
+    assert failed_node_payload["non_retryable_reason"] == run.failure_reason
+    assert failed_node_payload["retry_hint"] == "revise_input"
+
+    with pytest.raises(BusinessValidationError, match="该工作流节点不可重试"):
+        start_product_workflow_run(db_session, product_id=product.id, start_node_id=failed_node_run.node_id)
+
+    failed_node = db_session.get(WorkflowNode, failed_node_run.node_id)
+    assert failed_node is not None
+    next_config = dict(failed_node.config_json or {})
+    next_config["instruction"] = "改成安全的商品主图提示词"
+    updated_workflow = update_workflow_node(
+        db_session,
+        node_id=failed_node.id,
+        title=None,
+        position_x=None,
+        position_y=None,
+        config_json=next_config,
+    )
+    updated_payload = serialize_product_workflow(updated_workflow).model_dump(mode="json")
+    updated_node_payload = next(node for node in updated_payload["nodes"] if node["id"] == failed_node.id)
+    assert updated_node_payload["status"] == "idle"
+    assert updated_node_payload["failure_reason"] is None
+    assert updated_node_payload["attempt_count"] == 1
+    assert updated_node_payload["retry_count"] == 0
+    assert updated_node_payload["non_retryable_reason"] is None
+    assert updated_node_payload["retry_hint"] is None
+
+    unlocked_kickoff = start_product_workflow_run(db_session, product_id=product.id, start_node_id=failed_node.id)
+    assert unlocked_kickoff.created is True
 
 
 def test_workflow_time_limit_exception_marks_running_node_failed(

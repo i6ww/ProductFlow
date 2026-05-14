@@ -24,21 +24,39 @@ WORKFLOW_CANCELLED_REASON = "已取消"
 PRODUCT_WORKFLOW_CAPACITY_RETRY_DELAY_MS = 2000
 
 
-def workflow_run_failure_progress_metadata(*, reason: str, retryable: bool) -> dict[str, Any]:
-    return {
+def workflow_run_failure_progress_metadata(
+    *,
+    reason: str,
+    retryable: bool,
+    retry_hint: str | None = None,
+    failure_category: str | None = None,
+) -> dict[str, Any]:
+    metadata = {
         "last_failure_reason": reason,
         "last_failure_retryable": retryable,
-        "retry_hint": "retry_later" if retryable else "revise_input",
+        "retry_hint": retry_hint or ("retry_later" if retryable else "revise_input"),
     }
+    if failure_category:
+        metadata["last_failure_category"] = failure_category
+    return metadata
 
 
 class WorkflowSafeExecutionError(RuntimeError):
     """Execution failure whose string is safe to persist and show to users."""
 
-    def __init__(self, safe_message: str, *, retryable: bool = True) -> None:
+    def __init__(
+        self,
+        safe_message: str,
+        *,
+        retryable: bool = True,
+        retry_hint: str | None = None,
+        failure_category: str | None = None,
+    ) -> None:
         super().__init__(safe_message)
         self.safe_message = safe_message
         self.retryable = retryable
+        self.retry_hint = retry_hint
+        self.failure_category = failure_category
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +71,40 @@ def safe_workflow_failure_reason(exc: BaseException) -> str:
     if isinstance(exc, WorkflowSafeExecutionError):
         return exc.safe_message
     return str(exc)
+
+
+def workflow_failure_retry_hint(exc: BaseException) -> str | None:
+    value = getattr(exc, "retry_hint", None)
+    return value if isinstance(value, str) else None
+
+
+def workflow_failure_category(exc: BaseException) -> str | None:
+    value = getattr(exc, "failure_category", None)
+    return value if isinstance(value, str) else None
+
+
+def workflow_run_failure_context(exc: BaseException) -> dict[str, Any]:
+    return {
+        "reason": safe_workflow_failure_reason(exc)[:1000],
+        "is_retryable": getattr(exc, "retryable", True),
+        "retry_hint": workflow_failure_retry_hint(exc),
+        "failure_category": workflow_failure_category(exc),
+    }
+
+
+def workflow_node_failed_run_is_retryable(node: WorkflowNode, runs: list[WorkflowRun]) -> bool:
+    if node.status != WorkflowNodeStatus.FAILED or node.failure_reason == WORKFLOW_CANCELLED_REASON:
+        return False
+    ordered_runs = sorted(runs, key=lambda item: (item.started_at, item.id), reverse=True)
+    for run in ordered_runs:
+        if run.status != WorkflowRunStatus.FAILED:
+            continue
+        if any(
+            node_run.node_id == node.id and node_run.status == WorkflowNodeStatus.FAILED
+            for node_run in run.node_runs
+        ):
+            return run.is_retryable
+    return True
 
 
 def claim_workflow_node_run(session: Session, *, node_run_id: str, node_id: str) -> WorkflowNodeRunClaimResult:
@@ -99,6 +151,8 @@ def mark_workflow_run_failed(
     failed_node_id: str | None,
     reason: str,
     is_retryable: bool = True,
+    retry_hint: str | None = None,
+    failure_category: str | None = None,
 ) -> None:
     persisted_run = session.get(WorkflowRun, run_id)
     if persisted_run is None:
@@ -137,7 +191,12 @@ def mark_workflow_run_failed(
     persisted_run.status = WorkflowRunStatus.FAILED
     persisted_run.failure_reason = reason
     persisted_run.is_retryable = is_retryable
-    persisted_run.progress_metadata = workflow_run_failure_progress_metadata(reason=reason, retryable=is_retryable)
+    persisted_run.progress_metadata = workflow_run_failure_progress_metadata(
+        reason=reason,
+        retryable=is_retryable,
+        retry_hint=retry_hint,
+        failure_category=failure_category,
+    )
     persisted_run.finished_at = now
     persisted_run.workflow.updated_at = now
     session.commit()

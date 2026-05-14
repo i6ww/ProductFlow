@@ -67,7 +67,6 @@ import {
   shouldBlockDuplicateGenerationSubmit,
   shouldRefreshImageSessionDetailFromStatus,
 } from "./image-chat/branching";
-import { formatMobileGenerationSummary } from "./image-chat/mobileLayout";
 import type {
   ImageGenerationSubmitGuard,
   ImageGenerationSubmitPayload,
@@ -371,15 +370,6 @@ export function ImageChatPage() {
   const selectedPlaceholder = useMemo(
     () => findImageHistoryPlaceholder(historyBranches, selectedTaskPlaceholderId),
     [historyBranches, selectedTaskPlaceholderId],
-  );
-  const generationSummary = formatMobileGenerationSummary(
-    {
-      size,
-      generationCount,
-      selectedReferenceCount: selectedReferenceAssetIds.length,
-      toolOptions: compactImageToolOptions(toolOptions, imageToolAllowedFields) ?? {},
-    },
-    t,
   );
   const activePreviewRound =
     previewRound && imageSession?.rounds.some((round) => round.id === previewRound.id) ? previewRound : null;
@@ -1010,7 +1000,6 @@ export function ImageChatPage() {
                     <div className="truncate text-sm font-semibold text-slate-950 dark:text-white">
                       {imageSession?.title ?? t("chat.workbench")}
                     </div>
-                    <div className="truncate text-xs text-slate-500 dark:text-slate-400">{generationSummary}</div>
                   </>
                 )}
               </div>
@@ -1123,36 +1112,6 @@ export function ImageChatPage() {
               onCancelGenerationTask={handleCancelGenerationTask}
               t={t}
             />
-            {selectedRound ? (
-              <div className="mt-2 grid grid-cols-2 gap-2 lg:hidden">
-                <a
-                  href={api.toApiUrl(selectedRound.generated_asset.download_url)}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={t("chat.downloadCurrent")}
-                  aria-label={t("chat.downloadCurrent")}
-                  className="inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-center text-xs font-semibold leading-4 text-slate-700 shadow-sm transition-colors active:scale-[0.98] hover:border-indigo-200 hover:text-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950/80 dark:text-slate-200 dark:hover:border-violet-400/60 dark:hover:text-violet-100 sm:text-sm"
-                >
-                  <Download size={16} className="shrink-0" />
-                  <span>{t("chat.downloadCurrent")}</span>
-                </a>
-                <button
-                  type="button"
-                  onClick={handleSaveSelectedToGallery}
-                  disabled={saveGalleryMutation.isPending}
-                  title={t("chat.saveSelectedGallery")}
-                  aria-label={t("chat.saveSelectedGallery")}
-                  className="inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-3 py-2 text-center text-xs font-semibold leading-4 text-white shadow-sm shadow-indigo-500/20 ring-1 ring-indigo-500 transition-colors active:scale-[0.98] hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-60 dark:bg-gradient-to-r dark:from-indigo-500 dark:to-violet-500 dark:shadow-violet-900/35 dark:ring-violet-300/35 dark:focus-visible:ring-violet-300 sm:text-sm"
-                >
-                  {saveGalleryMutation.isPending ? (
-                    <Loader2 size={16} className="shrink-0 animate-spin" />
-                  ) : (
-                    <GalleryHorizontalEnd size={16} className="shrink-0" />
-                  )}
-                  <span>{t("chat.sendGallery")}</span>
-                </button>
-              </div>
-            ) : null}
             {selectedRound?.provider_notes.length ? (
               <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/10 dark:text-amber-200">
                 {selectedRound.provider_notes.map((note) => (
@@ -1455,18 +1414,45 @@ export function ImageChatPage() {
       </Drawer.Root>
 
       <div className="fixed inset-x-0 z-40 px-3 lg:hidden" style={{ bottom: "calc(4.1rem + env(safe-area-inset-bottom))" }}>
-        <div className="mx-auto max-w-2xl rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_-6px_18px_rgba(15,23,42,0.12)] dark:border-slate-700 dark:bg-slate-950 dark:shadow-[0_-12px_28px_rgba(0,0,0,0.30)]">
+        <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_-6px_18px_rgba(15,23,42,0.12)] dark:border-slate-700 dark:bg-slate-950 dark:shadow-[0_-12px_28px_rgba(0,0,0,0.30)]">
+          {selectedRound ? (
+            <div className="flex shrink-0 items-center gap-1.5">
+              <a
+                href={api.toApiUrl(selectedRound.generated_asset.download_url)}
+                target="_blank"
+                rel="noreferrer"
+                title={t("chat.downloadCurrent")}
+                aria-label={t("chat.downloadCurrent")}
+                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm transition-colors active:scale-[0.98] hover:border-indigo-200 hover:text-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950/80 dark:text-slate-200 dark:hover:border-violet-400/60 dark:hover:text-violet-100 dark:focus-visible:ring-violet-400"
+              >
+                <Download size={15} className="shrink-0" />
+                <span>{t("chat.downloadShort")}</span>
+              </a>
+              <button
+                type="button"
+                onClick={handleSaveSelectedToGallery}
+                disabled={saveGalleryMutation.isPending}
+                title={t("chat.saveSelectedGallery")}
+                aria-label={t("chat.saveSelectedGallery")}
+                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 text-xs font-semibold text-indigo-700 shadow-sm transition-colors active:scale-[0.98] hover:border-indigo-300 hover:bg-indigo-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-60 dark:border-violet-400/35 dark:bg-violet-500/15 dark:text-violet-100 dark:hover:border-violet-300/55 dark:hover:bg-violet-500/25 dark:focus-visible:ring-violet-400"
+              >
+                {saveGalleryMutation.isPending ? <Loader2 size={15} className="shrink-0 animate-spin" /> : <GalleryHorizontalEnd size={15} className="shrink-0" />}
+                <span>{t("chat.sendGalleryShort")}</span>
+              </button>
+            </div>
+          ) : null}
           <button
             ref={mobileSettingsButtonRef}
             type="button"
             onClick={() => setMobileGenerationSheetOpen(true)}
-            className="flex min-h-11 w-full min-w-0 items-center rounded-xl bg-indigo-600 px-3 text-left text-white shadow-md shadow-indigo-600/16 transition-colors hover:bg-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-violet-600 dark:shadow-violet-900/35 dark:ring-1 dark:ring-violet-300/35 dark:focus-visible:ring-violet-300"
+            className={`flex min-h-11 min-w-0 items-center rounded-xl bg-indigo-600 text-left text-white shadow-md shadow-indigo-600/16 transition-colors hover:bg-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-violet-600 dark:shadow-violet-900/35 dark:ring-1 dark:ring-violet-300/35 dark:focus-visible:ring-violet-300 ${
+              selectedRound ? "flex-1 px-2.5" : "w-full px-3"
+            }`}
             aria-label={t("chat.openGenerationSheet")}
           >
             <Sparkles size={17} className="mr-2 shrink-0" />
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-semibold leading-5">{t("chat.mobileGenerate")}</span>
-              <span className="block truncate text-xs leading-4 text-indigo-100 dark:text-violet-100">{generationSummary}</span>
             </span>
             <ChevronRight size={17} className="ml-2 shrink-0 text-indigo-100 dark:text-violet-100" />
           </button>

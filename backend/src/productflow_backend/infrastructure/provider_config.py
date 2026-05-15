@@ -15,18 +15,22 @@ from productflow_backend.infrastructure.db.session import get_session_factory
 TEXT_PURPOSE = "text"
 IMAGE_PURPOSE = "image"
 PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai_compatible"
+PROVIDER_TYPE_GOOGLE_GEMINI = "google_gemini"
+PROVIDER_TYPES = {PROVIDER_TYPE_OPENAI_COMPATIBLE, PROVIDER_TYPE_GOOGLE_GEMINI}
 
 TEXT_PROVIDER_KINDS = {"mock", "openai"}
-IMAGE_PROVIDER_KINDS = {"mock", "openai_responses", "openai_images"}
+IMAGE_PROVIDER_KINDS = {"mock", "openai_responses", "openai_images", "google_gemini_image"}
 PROVIDER_PURPOSES = {TEXT_PURPOSE, IMAGE_PURPOSE}
 
 CAPABILITY_TEXT_RESPONSES = "text_responses"
 CAPABILITY_IMAGE_RESPONSES = "image_responses"
 CAPABILITY_IMAGE_IMAGES = "image_images"
+CAPABILITY_IMAGE_GOOGLE_GEMINI = "image_google_gemini"
 PROVIDER_CAPABILITIES = {
     CAPABILITY_TEXT_RESPONSES,
     CAPABILITY_IMAGE_RESPONSES,
     CAPABILITY_IMAGE_IMAGES,
+    CAPABILITY_IMAGE_GOOGLE_GEMINI,
 }
 UNSET_PROVIDER_FIELD = object()
 
@@ -58,7 +62,7 @@ class ResolvedTextProviderConfig:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedImageProviderConfig:
-    provider_kind: Literal["mock", "openai_responses", "openai_images"]
+    provider_kind: Literal["mock", "openai_responses", "openai_images", "google_gemini_image"]
     model: str
     provider_profile_id: str | None = None
     api_key: str | None = None
@@ -66,6 +70,8 @@ class ResolvedImageProviderConfig:
     images_quality: str | None = None
     images_style: str | None = None
     responses_background_enabled: bool = False
+    gemini_api_version: str = "v1beta"
+    gemini_output_mime_type: str | None = None
 
 
 def ensure_provider_config_bootstrapped(session: Session | None = None) -> None:
@@ -170,18 +176,23 @@ def create_provider_profile(
     base_url: str | None,
     api_key: str | None,
     capabilities: list[str],
+    provider_type: str = PROVIDER_TYPE_OPENAI_COMPATIBLE,
     default_models: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
     enabled: bool = True,
 ) -> ProviderProfile:
-    _validate_capabilities(capabilities)
+    provider_type = _normalize_provider_type(provider_type)
+    normalized_capabilities = _dedupe_ordered(capabilities)
+    _validate_capabilities_for_provider_type(normalized_capabilities, provider_type=provider_type)
+    normalized_base_url = _normalize_optional_text(base_url)
+    _validate_provider_profile_connection(provider_type=provider_type, base_url=normalized_base_url)
     normalized_name = _normalize_required_text(name, "供应商名称")
     profile = ProviderProfile(
         name=normalized_name,
-        provider_type=PROVIDER_TYPE_OPENAI_COMPATIBLE,
-        base_url=_normalize_optional_text(base_url),
+        provider_type=provider_type,
+        base_url=normalized_base_url,
         api_key=_normalize_optional_text(api_key),
-        capabilities_json=_dedupe_ordered(capabilities),
+        capabilities_json=normalized_capabilities,
         default_models_json=default_models or {},
         config_json=config or {},
         enabled=enabled,
@@ -197,6 +208,7 @@ def update_provider_profile(
     profile_id: str,
     *,
     name: str | None = None,
+    provider_type: str | None = None,
     base_url: str | None | object = UNSET_PROVIDER_FIELD,
     api_key: str | None | object = UNSET_PROVIDER_FIELD,
     capabilities: list[str] | None = None,
@@ -207,20 +219,33 @@ def update_provider_profile(
     profile = session.get(ProviderProfile, profile_id)
     if profile is None or profile.archived_at is not None:
         raise ValueError("供应商不存在")
+    next_provider_type = _normalize_provider_type(provider_type) if provider_type is not None else profile.provider_type
+    next_base_url = profile.base_url
+    next_capabilities = list(profile.capabilities_json or [])
     if name is not None:
         profile.name = _normalize_required_text(name, "供应商名称")
     if base_url is not UNSET_PROVIDER_FIELD:
-        profile.base_url = _normalize_optional_text(base_url if isinstance(base_url, str) else None)
+        next_base_url = _normalize_optional_text(base_url if isinstance(base_url, str) else None)
     if api_key is not UNSET_PROVIDER_FIELD:
         normalized_api_key = _normalize_optional_text(api_key if isinstance(api_key, str) else None)
         if normalized_api_key is not None:
             profile.api_key = normalized_api_key
     if capabilities is not None:
-        _validate_capabilities(capabilities)
-        _validate_profile_update_keeps_active_bindings(session, profile, capabilities=capabilities, enabled=enabled)
-        profile.capabilities_json = _dedupe_ordered(capabilities)
+        next_capabilities = _dedupe_ordered(capabilities)
+    _validate_capabilities_for_provider_type(next_capabilities, provider_type=next_provider_type)
+    _validate_provider_profile_connection(provider_type=next_provider_type, base_url=next_base_url)
+    if provider_type is not None or capabilities is not None:
+        _validate_profile_update_keeps_active_bindings(
+            session,
+            profile,
+            capabilities=next_capabilities,
+            enabled=enabled,
+        )
     elif enabled is not None:
         _validate_profile_update_keeps_active_bindings(session, profile, capabilities=None, enabled=enabled)
+    profile.provider_type = next_provider_type
+    profile.base_url = next_base_url
+    profile.capabilities_json = next_capabilities
     if default_models is not None:
         profile.default_models_json = default_models
     if config is not None:
@@ -300,6 +325,17 @@ def validate_provider_capabilities(capabilities: list[str]) -> None:
     _validate_capabilities(capabilities)
 
 
+def validate_provider_profile_contract(
+    *,
+    provider_type: str,
+    capabilities: list[str],
+    base_url: str | None,
+) -> None:
+    normalized_provider_type = _normalize_provider_type(provider_type)
+    _validate_capabilities_for_provider_type(capabilities, provider_type=normalized_provider_type)
+    _validate_provider_profile_connection(provider_type=normalized_provider_type, base_url=base_url)
+
+
 def normalize_provider_binding_runtime_config(
     *,
     purpose: str,
@@ -365,10 +401,10 @@ def resolve_image_provider_config() -> ResolvedImageProviderConfig:
                 provider_kind="mock",
                 model=_require_text_value(binding.model_settings_json, "model", "图片模型未配置"),
             )
-        if kind not in {"openai_responses", "openai_images"}:
+        if kind not in {"openai_responses", "openai_images", "google_gemini_image"}:
             raise RuntimeError(f"暂不支持的图片 provider: {kind}")
         profile = _require_active_profile(binding)
-        capability = CAPABILITY_IMAGE_RESPONSES if kind == "openai_responses" else CAPABILITY_IMAGE_IMAGES
+        capability = _capability_for_kind(kind)
         _require_capability(profile, capability)
         return ResolvedImageProviderConfig(
             provider_kind=kind,  # type: ignore[arg-type]
@@ -394,6 +430,16 @@ def resolve_image_provider_config() -> ResolvedImageProviderConfig:
                 )
                 if kind == "openai_responses"
                 else False
+            ),
+            gemini_api_version=(
+                (_optional_str(binding.config_json.get("gemini_api_version")) or "v1beta")
+                if kind == "google_gemini_image"
+                else "v1beta"
+            ),
+            gemini_output_mime_type=(
+                _optional_str(binding.config_json.get("gemini_output_mime_type"))
+                if kind == "google_gemini_image"
+                else None
             ),
         )
     finally:
@@ -517,6 +563,7 @@ def _validate_binding_payload(
         raise ValueError("供应商已停用")
     capability = _capability_for_kind(provider_kind)
     _require_capability(profile, capability)
+    _validate_profile_type_supports_capability(profile.provider_type, capability)
 
 
 def _validate_profile_update_keeps_active_bindings(
@@ -552,6 +599,8 @@ def _capability_for_kind(provider_kind: str) -> str:
         return CAPABILITY_IMAGE_RESPONSES
     if provider_kind == "openai_images":
         return CAPABILITY_IMAGE_IMAGES
+    if provider_kind == "google_gemini_image":
+        return CAPABILITY_IMAGE_GOOGLE_GEMINI
     raise ValueError("供应商接口类型不支持真实供应商档案")
 
 
@@ -579,6 +628,10 @@ def _validate_binding_runtime_config(
             "图片 Responses 后台响应模式未配置",
             exc_type=ValueError,
         )
+    if provider_kind == "google_gemini_image":
+        gemini_api_version = _optional_str(config.get("gemini_api_version")) or "v1beta"
+        if gemini_api_version not in {"v1", "v1beta"}:
+            raise ValueError("Gemini API 版本必须是 v1 或 v1beta")
 
 
 def _normalize_binding_config(*, purpose: str, provider_kind: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -599,6 +652,18 @@ def _normalize_binding_config(*, purpose: str, provider_kind: str, config: dict[
             for key, value in {
                 "images_quality": _optional_str(config.get("images_quality")),
                 "images_style": _optional_str(config.get("images_style")),
+            }.items()
+            if value is not None
+        }
+    if provider_kind == "google_gemini_image":
+        gemini_api_version = _optional_str(config.get("gemini_api_version")) or "v1beta"
+        if gemini_api_version not in {"v1", "v1beta"}:
+            raise ValueError("Gemini API 版本必须是 v1 或 v1beta")
+        return {
+            key: value
+            for key, value in {
+                "gemini_api_version": gemini_api_version,
+                "gemini_output_mime_type": _optional_str(config.get("gemini_output_mime_type")),
             }.items()
             if value is not None
         }
@@ -640,6 +705,36 @@ def _validate_capabilities(capabilities: list[str]) -> None:
     unknown = set(capabilities) - PROVIDER_CAPABILITIES
     if unknown:
         raise ValueError(f"供应商能力不支持: {', '.join(sorted(unknown))}")
+
+
+def _normalize_provider_type(provider_type: str) -> str:
+    normalized = str(provider_type or "").strip()
+    if normalized not in PROVIDER_TYPES:
+        raise ValueError("供应商类型不支持")
+    return normalized
+
+
+def _validate_profile_type_supports_capability(provider_type: str, capability: str) -> None:
+    if provider_type == PROVIDER_TYPE_GOOGLE_GEMINI:
+        if capability != CAPABILITY_IMAGE_GOOGLE_GEMINI:
+            raise ValueError("Google Gemini 供应商档案只支持 Gemini 图片能力")
+        return
+    if provider_type == PROVIDER_TYPE_OPENAI_COMPATIBLE:
+        if capability == CAPABILITY_IMAGE_GOOGLE_GEMINI:
+            raise ValueError("OpenAI 兼容供应商档案不支持 Gemini 图片能力")
+        return
+    raise ValueError("供应商类型不支持")
+
+
+def _validate_capabilities_for_provider_type(capabilities: list[str], *, provider_type: str) -> None:
+    _validate_capabilities(capabilities)
+    for capability in capabilities:
+        _validate_profile_type_supports_capability(provider_type, capability)
+
+
+def _validate_provider_profile_connection(*, provider_type: str, base_url: str | None) -> None:
+    if provider_type == PROVIDER_TYPE_GOOGLE_GEMINI and base_url:
+        raise ValueError("Google Gemini 供应商暂不支持自定义 Base URL")
 
 
 def _normalize_required_text(value: str, label: str) -> str:

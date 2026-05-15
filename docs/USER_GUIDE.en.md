@@ -234,7 +234,7 @@ The top-navigation **Settings** page can also manage:
 
 - Copy provider and copy model.
 - Image provider and image model.
-- Provider profiles, including OpenAI-compatible Base URL, API key, and interface capabilities.
+- Provider profiles, including provider type, connection data, API key, and interface capabilities. Google Gemini profiles use the official SDK endpoint and do not configure a Base URL.
 - Default image size. Iterative image generation and workbench image generation can directly select common 1K / 2K / 4K frames or enter custom width/height.
 - Iterative image-generation idle recovery threshold, defaulting to 90 minutes; the system judges stale running tasks by the latest generation-progress heartbeat.
 - Upload file size limits.

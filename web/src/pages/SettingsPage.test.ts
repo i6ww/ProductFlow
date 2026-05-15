@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   configValuesFromChangedDrafts,
   draftsFromConfig,
+  imageBindingPayloadFromDraft,
   providerDisableBlocked,
   providerDrawerCreateState,
   providerDrawerEditState,
@@ -141,6 +142,7 @@ describe("SettingsPage provider profile helpers", () => {
       editingProfileId: null,
       form: {
         name: "",
+        provider_type: "openai_compatible",
         base_url: "",
         api_key: "",
         capabilities: ["text_responses", "image_images"],
@@ -164,6 +166,7 @@ describe("SettingsPage provider profile helpers", () => {
       editingProfileId: "profile-edit",
       form: {
         name: "Custom",
+        provider_type: "openai_compatible",
         base_url: "",
         api_key: "",
         capabilities: ["text_responses", "image_responses"],
@@ -173,9 +176,33 @@ describe("SettingsPage provider profile helpers", () => {
     expect(providerFormFromProfile(profile).api_key).toBe("");
   });
 
+  it("opens the drawer for a Google Gemini profile with native provider metadata", () => {
+    const profile = providerProfile({
+      id: "profile-gemini",
+      name: "Gemini",
+      provider_type: "google_gemini",
+      base_url: null,
+      capabilities: ["image_google_gemini"],
+    });
+
+    expect(providerDrawerEditState(profile)).toEqual({
+      open: true,
+      editingProfileId: "profile-gemini",
+      form: {
+        name: "Gemini",
+        provider_type: "google_gemini",
+        base_url: "",
+        api_key: "",
+        capabilities: ["image_google_gemini"],
+        enabled: true,
+      },
+    });
+  });
+
   it("builds create and edit payloads while preserving blank-key edit semantics", () => {
     const form = {
       name: "  OpenRouter  ",
+      provider_type: "openai_compatible" as const,
       base_url: "  https://openrouter.ai/api/v1  ",
       api_key: "",
       capabilities: ["text_responses", "image_images"] as ProviderCapability[],
@@ -184,6 +211,7 @@ describe("SettingsPage provider profile helpers", () => {
 
     expect(providerProfileCreatePayload(form)).toEqual({
       name: "OpenRouter",
+      provider_type: "openai_compatible",
       base_url: "https://openrouter.ai/api/v1",
       api_key: null,
       capabilities: ["text_responses", "image_images"],
@@ -191,9 +219,38 @@ describe("SettingsPage provider profile helpers", () => {
     });
     expect(providerProfileUpdatePayload(form)).toEqual({
       name: "OpenRouter",
+      provider_type: "openai_compatible",
       base_url: "https://openrouter.ai/api/v1",
       api_key: "",
       capabilities: ["text_responses", "image_images"],
+      enabled: true,
+    });
+  });
+
+  it("builds Google Gemini provider payloads without custom base URL", () => {
+    const form = {
+      name: "  Gemini  ",
+      provider_type: "google_gemini" as const,
+      base_url: "https://should-not-submit.example",
+      api_key: "  google-key  ",
+      capabilities: ["image_google_gemini"] as ProviderCapability[],
+      enabled: true,
+    };
+
+    expect(providerProfileCreatePayload(form)).toEqual({
+      name: "Gemini",
+      provider_type: "google_gemini",
+      base_url: null,
+      api_key: "google-key",
+      capabilities: ["image_google_gemini"],
+      enabled: true,
+    });
+    expect(providerProfileUpdatePayload(form)).toEqual({
+      name: "Gemini",
+      provider_type: "google_gemini",
+      base_url: null,
+      api_key: "  google-key  ",
+      capabilities: ["image_google_gemini"],
       enabled: true,
     });
   });
@@ -215,6 +272,26 @@ describe("SettingsPage provider profile helpers", () => {
     ]);
   });
 
+  it("builds Google Gemini image binding payloads without OpenAI-specific config", () => {
+    expect(
+      imageBindingPayloadFromDraft({
+        provider_kind: "google_gemini_image",
+        provider_profile_id: "profile-gemini",
+        model: " gemini-2.5-flash-image ",
+        images_quality: "high",
+        images_style: "vivid",
+        responses_background_enabled: true,
+        gemini_api_version: "v1beta",
+        gemini_output_mime_type: " image/png ",
+      }),
+    ).toEqual({
+      provider_kind: "google_gemini_image",
+      provider_profile_id: "profile-gemini",
+      model_settings: { model: "gemini-2.5-flash-image" },
+      config: { gemini_api_version: "v1beta", gemini_output_mime_type: "image/png" },
+    });
+  });
+
   it("blocks disabling an enabled provider that is currently used by a binding", () => {
     expect(providerDisableBlocked(providerProfile({ enabled: true }), { text: true, image: false })).toBe(true);
     expect(providerDisableBlocked(providerProfile({ enabled: true }), { text: false, image: false })).toBe(false);
@@ -232,6 +309,19 @@ describe("SettingsPage provider profile helpers", () => {
       'Delete "OpenRouter"?',
     );
     expect(translate("en-US", "settings.provider.deleteConfirmLabel")).toBe("Delete");
+  });
+
+  it("localizes Google Gemini provider labels", () => {
+    expect(translate("zh-CN", "settings.provider.capability.imageGoogleGemini")).toBe("Google Gemini 图片");
+    expect(translate("zh-CN", "settings.provider.type.googleGemini")).toBe("Google Gemini");
+    expect(translate("zh-CN", "settings.provider.interface.googleGeminiImage")).toBe(
+      "Google Gemini Image (未实测)",
+    );
+    expect(translate("en-US", "settings.provider.capability.imageGoogleGemini")).toBe("Google Gemini image");
+    expect(translate("en-US", "settings.provider.type.googleGemini")).toBe("Google Gemini");
+    expect(translate("en-US", "settings.provider.interface.googleGeminiImage")).toBe(
+      "Google Gemini Image (untested)",
+    );
   });
 });
 

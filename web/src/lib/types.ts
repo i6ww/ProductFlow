@@ -617,9 +617,9 @@ export interface SettingsLockState {
   configured: boolean;
 }
 
-export type ProviderCapability = "text_responses" | "image_responses" | "image_images";
+export type ProviderCapability = "text_responses" | "image_responses" | "image_images" | "image_google_gemini";
 export type ProviderPurpose = "text" | "image";
-export type ProviderType = "openai_compatible";
+export type ProviderType = "openai_compatible" | "google_gemini";
 
 export interface ProviderProfile {
   id: string;
@@ -638,6 +638,7 @@ export interface ProviderProfile {
 
 export interface ProviderProfileCreateRequest {
   name: string;
+  provider_type?: ProviderType;
   base_url?: string | null;
   api_key?: string | null;
   capabilities: ProviderCapability[];
@@ -648,6 +649,7 @@ export interface ProviderProfileCreateRequest {
 
 export interface ProviderProfileUpdateRequest {
   name?: string | null;
+  provider_type?: ProviderType | null;
   base_url?: string | null;
   api_key?: string | null;
   capabilities?: ProviderCapability[] | null;

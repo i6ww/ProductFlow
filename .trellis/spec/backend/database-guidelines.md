@@ -150,7 +150,7 @@ For runtime settings:
 - DB table: `provider_profiles`
   - `id: String(36)`
   - `name: String(120)`
-  - `provider_type: "openai_compatible"`
+  - `provider_type: "openai_compatible" | "google_gemini"`
   - `base_url: Text | null`
   - `api_key: Text | null`
   - `capabilities_json: JSON list[str]`
@@ -160,7 +160,7 @@ For runtime settings:
   - `archived_at: datetime | null`
 - DB table: `provider_bindings`
   - `purpose: "text" | "image"`
-  - `provider_kind: "mock" | "openai" | "openai_responses" | "openai_images"`
+  - `provider_kind: "mock" | "openai" | "openai_responses" | "openai_images" | "google_gemini_image"`
   - `provider_profile_id: String(36) | null`
   - `model_settings_json: JSON object`
   - `config_json: JSON object`
@@ -186,6 +186,10 @@ For runtime settings:
   `app_settings` rows, then creates provider profiles and text/image bindings once.
 - If legacy text and image configs share the same `(base_url, api_key)`, bootstrap creates one profile with merged
   capabilities. Different connections create separate profiles.
+- Google Gemini profiles use `provider_type="google_gemini"`, declare only `image_google_gemini`, reject custom
+  `base_url`, and can bind only to `provider_kind="google_gemini_image"`.
+- Google Gemini image bindings store `model_settings_json.model`, `config_json.gemini_api_version` (`v1beta` by default,
+  allowed values `v1` or `v1beta`), and optional `config_json.gemini_output_mime_type`.
 - Provider factories and concrete clients must read API key, base URL, provider kind, and model through
   `resolve_*_provider_config()`. They must not fall back to old `Settings.text_api_key`,
   `Settings.image_api_key`, or provider kind fields.
@@ -194,8 +198,9 @@ For runtime settings:
   with a clear configuration error instead of falling back to legacy `Settings.text_brief_model`,
   `Settings.text_copy_model`, or `Settings.image_generate_model`.
 - Image binding config is provider-kind scoped: `openai_responses` owns `responses_background_enabled`, while
-  `openai_images` owns `images_quality` and `images_style`. Do not require or persist Responses background config for
-  `openai_images` or `mock`.
+  `openai_images` owns `images_quality` and `images_style`, and `google_gemini_image` owns `gemini_api_version` plus
+  optional `gemini_output_mime_type`. Do not require or persist Responses background config for `openai_images`, Google
+  Gemini, or `mock`.
 - API responses for provider profiles expose `has_api_key`; they never expose the raw `api_key`.
 - A blank API key update preserves the existing stored key. A non-blank API key update replaces it.
 - While a provider profile is referenced by a real text/image binding, profile updates must not disable it or remove the
@@ -217,6 +222,12 @@ For runtime settings:
   resolution must fail clearly rather than using old URL/key fallback.
 - Missing text/image model settings in both binding and profile defaults -> resolver fails clearly and asks the operator to
   configure the provider binding; do not silently use legacy env/app_settings model values.
+- `google_gemini` profile with non-empty `base_url` -> provider profile create/update returns `400`.
+- `google_gemini` profile with any capability except `image_google_gemini` -> provider profile create/update returns
+  `400`.
+- `openai_compatible` profile with `image_google_gemini` -> provider profile create/update returns `400`.
+- `google_gemini_image` binding with `gemini_api_version` outside `v1` or `v1beta` -> provider binding update returns
+  `400`.
 - Missing `responses_background_enabled` -> only `openai_responses` image bindings fail. `openai_images` and `mock` must
   not require that field.
 
@@ -225,9 +236,12 @@ For runtime settings:
 - Good: one OpenAI-compatible gateway supports `text_responses` and `image_images`; text and image bindings point to the
   same profile and carry separate model settings.
 - Good: a text gateway and an image gateway use different keys or URLs; bootstrap creates two profiles.
+- Good: a Google Gemini profile has `provider_type="google_gemini"`, no `base_url`, capability
+  `image_google_gemini`, and the image binding stores `provider_kind="google_gemini_image"` plus Gemini-specific config.
 - Base: default local development has mock text/image bindings and no real provider profile.
 - Bad: showing `text_api_key` or `image_api_key` in `/api/settings`.
 - Bad: constructing an OpenAI client from `get_runtime_settings().image_api_key`.
+- Bad: modeling Google Gemini as an OpenAI-compatible gateway or storing a Gemini custom endpoint in `base_url`.
 - Bad: keeping a route-level legacy binding response that reports old provider kind when no binding exists.
 
 ### 6. Tests Required
@@ -240,6 +254,12 @@ For runtime settings:
 - Profile update test that active bindings prevent removing required capabilities and disabling the profile.
 - Resolver test proving existing provider bindings override stale legacy `app_settings` rows.
 - Resolver test proving missing binding/profile model settings do not fall back to stale legacy model rows or env values.
+- Settings API test for creating a `google_gemini` profile, rejecting custom Gemini `base_url`, and rejecting mismatched
+  capabilities across Google Gemini and OpenAI-compatible profiles.
+- Settings API test that `google_gemini_image` binding accepts only `v1` or `v1beta`, persists
+  `gemini_output_mime_type` only when non-empty, and round-trips through config export/import.
+- Provider payload test that `google_gemini_image` dispatches to the official `google-genai` client with text plus
+  reference image parts, aspect-ratio mapping, sanitized request metadata, and generic provider errors.
 - Provider payload tests should set legacy provider kind explicitly when they rely on env bootstrap.
 
 ### 7. Wrong vs Correct
@@ -256,6 +276,23 @@ Correct:
 ```python
 provider_config = resolve_image_provider_config()
 client = OpenAI(api_key=provider_config.api_key, base_url=provider_config.base_url)
+```
+
+Wrong:
+
+```python
+provider_config = resolve_image_provider_config()
+client = httpx.Client(base_url=provider_config.base_url)
+```
+
+Correct:
+
+```python
+provider_config = resolve_image_provider_config()
+client = genai.Client(
+    api_key=provider_config.api_key,
+    http_options=types.HttpOptions(apiVersion=provider_config.gemini_api_version),
+)
 ```
 
 ## Scenario: Runtime admin access toggle
@@ -833,7 +870,8 @@ failures into safe persisted failure reasons instead of leaking provider details
 - `responses_background_enabled == False` -> Responses provider payload omits top-level `background`.
 - `responses_background_enabled == True` and provider rejects top-level `background` -> retry without it once and keep the
   user-facing failure/detail generic if both attempts fail.
-- `openai_images` or `mock` image binding receives `responses_background_enabled` -> field is ignored and not stored.
+- `openai_images`, `google_gemini_image`, or `mock` image binding receives `responses_background_enabled` -> field is
+  ignored and not stored.
 - Per-request or workflow `tool_options` contains fields not listed in `image_tool_allowed_fields` -> field is filtered
   before persistence and provider calls.
 - Per-request `tool_options.output_compression < 0` or `> 100` -> `/api/image-sessions/{id}/generate` returns `422`.

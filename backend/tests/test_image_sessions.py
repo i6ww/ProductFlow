@@ -3,6 +3,7 @@ from __future__ import annotations
 from base64 import b64encode
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from dramatiq.middleware.time_limit import TimeLimitExceeded
@@ -22,6 +23,8 @@ from productflow_backend.infrastructure.db.models import (
     ImageSessionAsset,
     ImageSessionGenerationTask,
     ImageSessionRound,
+    ProviderBinding,
+    ProviderProfile,
 )
 
 
@@ -1696,16 +1699,17 @@ def test_image_session_openai_images_uses_selected_base_and_references_only(
     reference_ids = [asset.id for asset in updated.assets if asset.kind.value == "reference_upload"]
     assert len(reference_ids) == 2
 
+    branch_prompt = "只从第一张和第二张参考图继续"
     branched = generate_image_session_round(
         db_session,
         image_session_id=image_session.id,
-        prompt="只从第一张和第二张参考图继续",
+        prompt=branch_prompt,
         size="1024x1024",
         base_asset_id=first_asset_id,
         selected_reference_asset_ids=[reference_ids[1]],
         generation_count=1,
     )
-    branch_round = branched.rounds[-1]
+    branch_round = next(round_item for round_item in branched.rounds if round_item.prompt == branch_prompt)
     assert branch_round.provider_name == "openai-images"
     assert branch_round.base_asset_id == first_asset_id
     assert branch_round.selected_reference_asset_ids == [reference_ids[1]]
@@ -1725,6 +1729,120 @@ def test_image_session_openai_images_uses_selected_base_and_references_only(
     ]
     assert persisted.provider_output_json["_productflow"]["requested_image_count"] == 2
     assert persisted.provider_output_json["_productflow"]["effective_image_count"] == 2
+
+
+def test_image_session_google_gemini_uses_selected_base_and_references_only(
+    configured_env: Path,
+    db_session,
+    monkeypatch,
+) -> None:
+    from productflow_backend.application.image_sessions import (
+        add_image_session_reference_images,
+        create_image_session,
+        generate_image_session_round,
+    )
+
+    profile = ProviderProfile(
+        name="Gemini",
+        provider_type="google_gemini",
+        base_url=None,
+        api_key="google-api-key",
+        capabilities_json=["image_google_gemini"],
+        default_models_json={},
+        config_json={},
+        enabled=True,
+    )
+    db_session.add(profile)
+    db_session.flush()
+    db_session.add(
+        ProviderBinding(
+            purpose="image",
+            provider_kind="google_gemini_image",
+            provider_profile_id=profile.id,
+            model_settings_json={"model": "gemini-2.5-flash-image"},
+            config_json={"gemini_api_version": "v1beta"},
+        )
+    )
+    db_session.commit()
+
+    calls: list[dict] = []
+
+    def fake_generate_image(self, *, prompt, size, reference_images=None):
+        references = reference_images or []
+        calls.append({"prompt": prompt, "size": size, "references": references})
+        return SimpleNamespace(
+            bytes_data=_make_demo_image_bytes(),
+            mime_type="image/png",
+            model_name=self.model,
+            provider_name="google-gemini-image",
+            prompt_version="gemini-generate-content-image-v1",
+            size=size,
+            generated_at=datetime.now(UTC),
+            provider_response_id="gemini-response",
+            provider_request_json={
+                "prompt": prompt,
+                "size": size,
+                "reference_image_count": len(references),
+                "reference_images": [
+                    {"filename": reference.filename, "mime_type": reference.mime_type} for reference in references
+                ],
+            },
+            provider_output_json={"_productflow": {"model": self.model}},
+        )
+
+    monkeypatch.setattr(
+        "productflow_backend.infrastructure.image.gemini_provider.GoogleGeminiImageClient.generate_image",
+        fake_generate_image,
+    )
+
+    image_session = create_image_session(db_session, product_id=None, title="Gemini 分支测试")
+    first = generate_image_session_round(
+        db_session,
+        image_session_id=image_session.id,
+        prompt="第一张基础图",
+        size="1024x1024",
+    )
+    first_asset_id = first.rounds[-1].generated_asset_id
+    assert first_asset_id is not None
+
+    updated = add_image_session_reference_images(
+        db_session,
+        image_session_id=image_session.id,
+        reference_image_uploads=[
+            (_make_demo_image_bytes(), "ref-a.png", "image/png"),
+            (_make_demo_image_bytes(), "ref-b.png", "image/png"),
+        ],
+    )
+    reference_ids = [asset.id for asset in updated.assets if asset.kind.value == "reference_upload"]
+    assert len(reference_ids) == 2
+
+    branch_prompt = "只从第一张和第二张参考图继续"
+    branched = generate_image_session_round(
+        db_session,
+        image_session_id=image_session.id,
+        prompt=branch_prompt,
+        size="1024x1024",
+        base_asset_id=first_asset_id,
+        selected_reference_asset_ids=[reference_ids[1]],
+        generation_count=1,
+    )
+    branch_round = next(round_item for round_item in branched.rounds if round_item.prompt == branch_prompt)
+    assert branch_round.provider_name == "google-gemini-image"
+    assert branch_round.base_asset_id == first_asset_id
+    assert branch_round.selected_reference_asset_ids == [reference_ids[1]]
+
+    assert len(calls) == 2
+    assert calls[0]["references"] == []
+    assert [reference.filename for reference in calls[1]["references"]] == ["base.png", "reference-1.png"]
+
+    db_session.expire_all()
+    persisted = db_session.get(ImageSessionRound, branch_round.id)
+    assert persisted is not None
+    assert persisted.provider_request_json["reference_image_count"] == 2
+    assert persisted.provider_request_json["reference_images"] == [
+        {"filename": "base.png", "mime_type": "image/png"},
+        {"filename": "reference-1.png", "mime_type": "image/png"},
+    ]
 
 
 def test_image_session_branch_validates_asset_scope_and_kind(configured_env: Path) -> None:

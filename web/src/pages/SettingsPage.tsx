@@ -39,11 +39,13 @@ import type {
   ConfigItem,
   ConfigResponse,
   ProviderBinding,
+  ProviderBindingUpdateRequest,
   ProviderCapability,
   ProviderConfigResponse,
   ProviderProfile,
   ProviderProfileCreateRequest,
   ProviderProfileUpdateRequest,
+  ProviderType,
   SettingsExportPayload,
   SettingsImportPreviewResponse,
 } from "../lib/types";
@@ -78,6 +80,7 @@ interface SettingsSection {
 
 export interface ProviderProfileFormState {
   name: string;
+  provider_type: ProviderType;
   base_url: string;
   api_key: string;
   capabilities: ProviderCapability[];
@@ -102,13 +105,15 @@ interface TextBindingDraft {
   copy_model: string;
 }
 
-interface ImageBindingDraft {
-  provider_kind: "mock" | "openai_responses" | "openai_images";
+export interface ImageBindingDraft {
+  provider_kind: "mock" | "openai_responses" | "openai_images" | "google_gemini_image";
   provider_profile_id: string;
   model: string;
   images_quality: string;
   images_style: string;
   responses_background_enabled: boolean;
+  gemini_api_version: string;
+  gemini_output_mime_type: string;
 }
 
 const INPUT_CLASS =
@@ -211,17 +216,19 @@ const PROVIDER_CAPABILITY_OPTIONS: Array<{ value: ProviderCapability; labelKey: 
   { value: "text_responses", labelKey: "settings.provider.capability.textResponses" },
   { value: "image_responses", labelKey: "settings.provider.capability.imageResponses" },
   { value: "image_images", labelKey: "settings.provider.capability.imageImages" },
+  { value: "image_google_gemini", labelKey: "settings.provider.capability.imageGoogleGemini" },
 ];
 
 function providerCapabilityLabelKey(capability: ProviderCapability): TranslationKey {
   return (
     PROVIDER_CAPABILITY_OPTIONS.find((option) => option.value === capability)?.labelKey ??
-    "settings.provider.capability.imageImages"
+    "settings.provider.capability.imageGoogleGemini"
   );
 }
 
 const EMPTY_PROVIDER_FORM: ProviderProfileFormState = {
   name: "",
+  provider_type: "openai_compatible",
   base_url: "",
   api_key: "",
   capabilities: ["text_responses", "image_images"],
@@ -319,12 +326,29 @@ function boolValue(record: Record<string, unknown> | undefined, key: string, fal
   return typeof value === "boolean" ? value : fallback;
 }
 
+function defaultCapabilitiesForProviderType(providerType: ProviderType): ProviderCapability[] {
+  return providerType === "google_gemini" ? ["image_google_gemini"] : ["text_responses", "image_images"];
+}
+
+function providerTypeLabelKey(providerType: ProviderType): TranslationKey {
+  return providerType === "google_gemini"
+    ? "settings.provider.type.googleGemini"
+    : "settings.provider.type.openaiCompatible";
+}
+
+function providerDefaultEndpointLabelKey(profile: ProviderProfile): TranslationKey {
+  return profile.provider_type === "google_gemini"
+    ? "settings.provider.defaultGoogleEndpoint"
+    : "settings.provider.defaultBaseUrl";
+}
+
 export function providerFormFromProfile(profile?: ProviderProfile | null): ProviderProfileFormState {
   if (!profile) {
     return EMPTY_PROVIDER_FORM;
   }
   return {
     name: profile.name,
+    provider_type: profile.provider_type,
     base_url: profile.base_url ?? "",
     api_key: "",
     capabilities: profile.capabilities,
@@ -373,7 +397,8 @@ export function providerDisableBlocked(profile: ProviderProfile, usage: Provider
 export function providerProfileCreatePayload(form: ProviderProfileFormState): ProviderProfileCreateRequest {
   return {
     name: form.name.trim(),
-    base_url: form.base_url.trim() || null,
+    provider_type: form.provider_type,
+    base_url: form.provider_type === "google_gemini" ? null : form.base_url.trim() || null,
     api_key: form.api_key.trim() || null,
     capabilities: form.capabilities,
     enabled: form.enabled,
@@ -383,7 +408,8 @@ export function providerProfileCreatePayload(form: ProviderProfileFormState): Pr
 export function providerProfileUpdatePayload(form: ProviderProfileFormState): ProviderProfileUpdateRequest {
   return {
     name: form.name.trim(),
-    base_url: form.base_url.trim() || null,
+    provider_type: form.provider_type,
+    base_url: form.provider_type === "google_gemini" ? null : form.base_url.trim() || null,
     api_key: form.api_key,
     capabilities: form.capabilities,
     enabled: form.enabled,
@@ -405,7 +431,9 @@ function textBindingDraft(binding: ProviderBinding | undefined): TextBindingDraf
 
 function imageBindingDraft(binding: ProviderBinding | undefined): ImageBindingDraft {
   const providerKind =
-    binding?.provider_kind === "openai_responses" || binding?.provider_kind === "openai_images"
+    binding?.provider_kind === "openai_responses" ||
+    binding?.provider_kind === "openai_images" ||
+    binding?.provider_kind === "google_gemini_image"
       ? binding.provider_kind
       : "mock";
   return {
@@ -415,6 +443,33 @@ function imageBindingDraft(binding: ProviderBinding | undefined): ImageBindingDr
     images_quality: textValue(binding?.config, "images_quality"),
     images_style: textValue(binding?.config, "images_style"),
     responses_background_enabled: boolValue(binding?.config, "responses_background_enabled", true),
+    gemini_api_version: textValue(binding?.config, "gemini_api_version") || "v1beta",
+    gemini_output_mime_type: textValue(binding?.config, "gemini_output_mime_type"),
+  };
+}
+
+export function imageBindingPayloadFromDraft(draft: ImageBindingDraft): ProviderBindingUpdateRequest {
+  const config =
+    draft.provider_kind === "openai_responses"
+      ? { responses_background_enabled: draft.responses_background_enabled }
+      : draft.provider_kind === "openai_images"
+        ? {
+            ...(draft.images_quality.trim() ? { images_quality: draft.images_quality.trim() } : {}),
+            ...(draft.images_style.trim() ? { images_style: draft.images_style.trim() } : {}),
+          }
+        : draft.provider_kind === "google_gemini_image"
+          ? {
+              gemini_api_version: draft.gemini_api_version || "v1beta",
+              ...(draft.gemini_output_mime_type.trim()
+                ? { gemini_output_mime_type: draft.gemini_output_mime_type.trim() }
+                : {}),
+            }
+          : {};
+  return {
+    provider_kind: draft.provider_kind,
+    provider_profile_id: draft.provider_kind === "mock" ? null : draft.provider_profile_id,
+    model_settings: draft.model.trim() ? { model: draft.model.trim() } : {},
+    config,
   };
 }
 
@@ -999,12 +1054,15 @@ function ProviderProfileCard({
             </span>
             <span className="mt-2 flex items-center gap-1.5 truncate font-mono text-xs text-slate-500 dark:text-slate-400">
               <ServerCog size={13} className="shrink-0" />
-              <span className="truncate">{profile.base_url || t("settings.provider.defaultBaseUrl")}</span>
+              <span className="truncate">{profile.base_url || t(providerDefaultEndpointLabelKey(profile))}</span>
             </span>
           </span>
         </span>
 
         <span className="flex flex-wrap gap-1.5">
+          <span className="rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700 dark:bg-violet-500/12 dark:text-violet-100">
+            {t(providerTypeLabelKey(profile.provider_type))}
+          </span>
           {profile.capabilities.map((capability) => (
             <span
               key={`${profile.id}-${capability}`}
@@ -1232,6 +1290,19 @@ function ProviderProfileDrawer({
 }: ProviderProfileDrawerProps) {
   const { t } = useI18n();
   const titleId = useId();
+  const capabilityOptions = PROVIDER_CAPABILITY_OPTIONS.filter((option) =>
+    form.provider_type === "google_gemini"
+      ? option.value === "image_google_gemini"
+      : option.value !== "image_google_gemini",
+  );
+  const handleProviderTypeChange = (provider_type: ProviderType) => {
+    onFormChange({
+      ...form,
+      provider_type,
+      base_url: provider_type === "google_gemini" ? "" : form.base_url,
+      capabilities: defaultCapabilitiesForProviderType(provider_type),
+    });
+  };
   const toggleCapability = (capability: ProviderCapability) => {
     const selected = new Set(form.capabilities);
     if (selected.has(capability)) {
@@ -1241,7 +1312,7 @@ function ProviderProfileDrawer({
     }
     onFormChange({
       ...form,
-      capabilities: PROVIDER_CAPABILITY_OPTIONS.map((option) => option.value).filter((value) => selected.has(value)),
+      capabilities: capabilityOptions.map((option) => option.value).filter((value) => selected.has(value)),
     });
   };
 
@@ -1300,14 +1371,33 @@ function ProviderProfileDrawer({
                 placeholder={t("settings.provider.namePlaceholder")}
               />
             </SettingsFormField>
-            <SettingsFormField label={t("settings.provider.baseUrlLabel")}>
-              <ProviderDrawerTextInput
-                value={form.base_url}
-                onChange={(base_url) => onFormChange({ ...form, base_url })}
-                placeholder={t("settings.provider.baseUrlPlaceholder")}
-                icon={<Link2 size={16} />}
+            <SettingsFormField label={t("settings.provider.typeLabel")}>
+              <SelectField
+                value={form.provider_type}
+                options={[
+                  { value: "openai_compatible", label: t("settings.provider.type.openaiCompatible") },
+                  { value: "google_gemini", label: t("settings.provider.type.googleGemini") },
+                ]}
+                onChange={(value) =>
+                  handleProviderTypeChange(value === "google_gemini" ? "google_gemini" : "openai_compatible")
+                }
+                radius="lg"
               />
             </SettingsFormField>
+            {form.provider_type === "openai_compatible" ? (
+              <SettingsFormField label={t("settings.provider.baseUrlLabel")}>
+                <ProviderDrawerTextInput
+                  value={form.base_url}
+                  onChange={(base_url) => onFormChange({ ...form, base_url })}
+                  placeholder={t("settings.provider.baseUrlPlaceholder")}
+                  icon={<Link2 size={16} />}
+                />
+              </SettingsFormField>
+            ) : (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600 dark:border-slate-700 dark:bg-[#171f30] dark:text-slate-300">
+                {t("settings.provider.googleBaseUrlUnsupported")}
+              </div>
+            )}
             <SettingsFormField label={t("settings.provider.apiKeyLabel")}>
               <ProviderDrawerTextInput
                 type="password"
@@ -1327,7 +1417,7 @@ function ProviderProfileDrawer({
                 {t("settings.provider.capabilitiesLabel")}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {PROVIDER_CAPABILITY_OPTIONS.map((option) => (
+                {capabilityOptions.map((option) => (
                   <ProviderCapabilityToggle
                     key={option.value}
                     option={option}
@@ -1383,8 +1473,8 @@ function TextBindingSection({ data, draft, pending, onChange, onSave }: TextBind
         <SelectField
           value={draft.provider_kind}
           options={[
-            { value: "mock", label: "Mock" },
-            { value: "openai", label: "OpenAI Responses" },
+            { value: "mock", label: t("settings.provider.interface.mock") },
+            { value: "openai", label: t("settings.provider.interface.openaiResponses") },
           ]}
           onChange={(value) => onChange({ ...draft, provider_kind: value === "openai" ? "openai" : "mock" })}
           radius="lg"
@@ -1446,7 +1536,12 @@ interface ImageBindingSectionProps {
 
 function ImageBindingSection({ data, draft, pending, onChange, onSave }: ImageBindingSectionProps) {
   const { t } = useI18n();
-  const requiredCapability = draft.provider_kind === "openai_responses" ? "image_responses" : "image_images";
+  const requiredCapability =
+    draft.provider_kind === "openai_responses"
+      ? "image_responses"
+      : draft.provider_kind === "google_gemini_image"
+        ? "image_google_gemini"
+        : "image_images";
   const profiles = (data?.profiles ?? []).filter(
     (profile) => profile.enabled && !profile.archived_at && profile.capabilities.includes(requiredCapability),
   );
@@ -1456,15 +1551,18 @@ function ImageBindingSection({ data, draft, pending, onChange, onSave }: ImageBi
         <SelectField
           value={draft.provider_kind}
           options={[
-            { value: "mock", label: "Mock" },
-            { value: "openai_responses", label: "OpenAI Responses" },
-            { value: "openai_images", label: "OpenAI Images API" },
+            { value: "mock", label: t("settings.provider.interface.mock") },
+            { value: "openai_responses", label: t("settings.provider.interface.openaiResponses") },
+            { value: "openai_images", label: t("settings.provider.interface.openaiImages") },
+            { value: "google_gemini_image", label: t("settings.provider.interface.googleGeminiImage") },
           ]}
           onChange={(value) =>
             onChange({
               ...draft,
               provider_kind:
-                value === "openai_responses" || value === "openai_images" ? value : "mock",
+                value === "openai_responses" || value === "openai_images" || value === "google_gemini_image"
+                  ? value
+                  : "mock",
               provider_profile_id: "",
             })
           }
@@ -1472,7 +1570,7 @@ function ImageBindingSection({ data, draft, pending, onChange, onSave }: ImageBi
         />
       </SettingsFormField>
       {draft.provider_kind !== "mock" ? (
-        <SettingsFormField label={t("settings.provider.compatibleProviderLabel")}>
+        <SettingsFormField label={t("settings.provider.providerProfileLabel")}>
           <SelectField
             value={draft.provider_profile_id}
             options={[
@@ -1492,6 +1590,36 @@ function ImageBindingSection({ data, draft, pending, onChange, onSave }: ImageBi
           placeholder={t("settings.provider.imageModelPlaceholder")}
         />
       </SettingsFormField>
+      {draft.provider_kind === "google_gemini_image" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SettingsFormField label={t("settings.provider.geminiApiVersionLabel")}>
+            <SelectField
+              value={draft.gemini_api_version}
+              options={[
+                { value: "v1beta", label: "v1beta" },
+                { value: "v1", label: "v1" },
+              ]}
+              onChange={(value) =>
+                onChange({ ...draft, gemini_api_version: value === "v1" ? "v1" : "v1beta" })
+              }
+              radius="lg"
+            />
+          </SettingsFormField>
+          <SettingsFormField label={t("settings.provider.geminiOutputMimeTypeLabel")}>
+            <SelectField
+              value={draft.gemini_output_mime_type}
+              options={[
+                { value: "", label: t("settings.provider.geminiOutputMimeTypeDefault") },
+                { value: "image/png", label: "image/png" },
+                { value: "image/jpeg", label: "image/jpeg" },
+                { value: "image/webp", label: "image/webp" },
+              ]}
+              onChange={(value) => onChange({ ...draft, gemini_output_mime_type: value })}
+              radius="lg"
+            />
+          </SettingsFormField>
+        </div>
+      ) : null}
       {draft.provider_kind === "openai_images" ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <SettingsFormField label={t("settings.provider.imagesQualityLabel")}>
@@ -1858,21 +1986,7 @@ export function SettingsPage() {
 
   const updateImageBindingMutation = useMutation({
     mutationFn: () => {
-      const config =
-        imageDraft.provider_kind === "openai_responses"
-          ? { responses_background_enabled: imageDraft.responses_background_enabled }
-          : imageDraft.provider_kind === "openai_images"
-            ? {
-                ...(imageDraft.images_quality.trim() ? { images_quality: imageDraft.images_quality.trim() } : {}),
-                ...(imageDraft.images_style.trim() ? { images_style: imageDraft.images_style.trim() } : {}),
-              }
-            : {};
-      return api.updateProviderBinding("image", {
-        provider_kind: imageDraft.provider_kind,
-        provider_profile_id: imageDraft.provider_kind === "mock" ? null : imageDraft.provider_profile_id,
-        model_settings: imageDraft.model.trim() ? { model: imageDraft.model.trim() } : {},
-        config,
-      });
+      return api.updateProviderBinding("image", imageBindingPayloadFromDraft(imageDraft));
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["provider-config"] });

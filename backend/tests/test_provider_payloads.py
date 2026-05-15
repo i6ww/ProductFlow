@@ -4,6 +4,7 @@ import logging
 from base64 import b64encode
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,10 +44,19 @@ from productflow_backend.domain.enums import (
 )
 from productflow_backend.infrastructure.db.models import (
     AppSetting,
+    ProviderBinding,
+    ProviderProfile,
 )
 from productflow_backend.infrastructure.db.session import get_session_factory
+from productflow_backend.infrastructure.image.gemini_provider import (
+    GoogleGeminiImageClient,
+    GoogleGeminiImageProvider,
+    GoogleGeminiReferenceImage,
+    map_productflow_size_to_gemini_image_config,
+)
 from productflow_backend.infrastructure.image.images_provider import OpenAIImagesImageProvider
 from productflow_backend.infrastructure.image.responses_provider import OpenAIResponsesImageProvider
+from productflow_backend.infrastructure.provider_config import ResolvedImageProviderConfig
 
 REMOVED_COPY_OUTPUT_KEYS = [
     "derived" + "_fields",
@@ -1646,6 +1656,119 @@ def test_openai_images_provider_factory_and_client_generate_payload(
         "style": "vivid",
     }
     assert result.provider_output_json == {}
+
+
+def test_google_gemini_provider_factory_and_client_generate_payload(
+    configured_env: Path,
+    monkeypatch,
+) -> None:
+    session = get_session_factory()()
+    try:
+        profile = ProviderProfile(
+            name="Gemini",
+            provider_type="google_gemini",
+            base_url=None,
+            api_key="google-api-key",
+            capabilities_json=["image_google_gemini"],
+            default_models_json={"image_model": "gemini-2.5-flash-image"},
+            config_json={},
+            enabled=True,
+        )
+        session.add(profile)
+        session.flush()
+        session.add(
+            ProviderBinding(
+                purpose="image",
+                provider_kind="google_gemini_image",
+                provider_profile_id=profile.id,
+                model_settings_json={"model": "gemini-3.1-flash-image-preview"},
+                config_json={"gemini_api_version": "v1beta", "gemini_output_mime_type": "image/png"},
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    calls: list[dict] = []
+    client_kwargs: list[dict] = []
+    image_bytes = _make_demo_image_bytes()
+
+    class DummyModels:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                response_id="gemini-response-1",
+                model_version="gemini-test-version",
+                parts=[
+                    SimpleNamespace(text="ok"),
+                    SimpleNamespace(inline_data=SimpleNamespace(data=image_bytes, mime_type="image/png")),
+                ],
+            )
+
+    class DummyClient:
+        def __init__(self, **kwargs) -> None:
+            client_kwargs.append(kwargs)
+            self.models = DummyModels()
+
+    monkeypatch.setattr("productflow_backend.infrastructure.image.gemini_provider.genai.Client", DummyClient)
+
+    from productflow_backend.infrastructure.image.factory import get_image_provider
+
+    assert isinstance(get_image_provider(), GoogleGeminiImageProvider)
+
+    result = GoogleGeminiImageClient().generate_image(
+        prompt="生成商品图",
+        size="2048x1152",
+        reference_images=[GoogleGeminiReferenceImage(image_bytes, "image/png", "ref.png")],
+    )
+
+    assert client_kwargs[0]["api_key"] == "google-api-key"
+    assert calls[0]["model"] == "gemini-3.1-flash-image-preview"
+    assert len(calls[0]["contents"]) == 2
+    assert result.mime_type == "image/png"
+    assert result.model_name == "gemini-3.1-flash-image-preview"
+    assert result.provider_response_id == "gemini-response-1"
+    assert result.provider_request_json == {
+        "model": "gemini-3.1-flash-image-preview",
+        "prompt": "生成商品图",
+        "size": "2048x1152",
+        "reference_image_count": 1,
+        "reference_images": [{"filename": "ref.png", "mime_type": "image/png", "byte_count": len(image_bytes)}],
+        "image_config": {"aspect_ratio": "16:9", "image_size": "2K", "output_mime_type": "image/png"},
+    }
+    assert result.provider_output_json == {
+        "response_id": "gemini-response-1",
+        "model_version": "gemini-test-version",
+        "text_part_count": 1,
+        "_productflow": {
+            "model": "gemini-3.1-flash-image-preview",
+            "requested_size": "2048x1152",
+            "effective_aspect_ratio": "16:9",
+            "effective_image_size": "2K",
+        },
+    }
+    assert "base64" not in str(result.provider_request_json).lower()
+    assert image_bytes.hex() not in str(result.provider_output_json)
+
+
+def test_google_gemini_size_mapping_and_sanitized_errors() -> None:
+    config = map_productflow_size_to_gemini_image_config("1024x1536", "gemini-2.5-flash-image")
+    assert config.aspect_ratio == "2:3"
+    assert config.image_size is None
+
+    preview_config = map_productflow_size_to_gemini_image_config("3840x2160", "gemini-3-pro-image-preview")
+    assert preview_config.aspect_ratio == "16:9"
+    assert preview_config.image_size == "4K"
+
+    with pytest.raises(RuntimeError) as missing_key:
+        GoogleGeminiImageClient(
+            ResolvedImageProviderConfig(
+                provider_kind="google_gemini_image",
+                model="gemini-2.5-flash-image",
+                api_key=None,
+            )
+        ).generate_image(prompt="生成图", size="1024x1024")
+    assert str(missing_key.value) == "图片供应商档案缺少 API Key"
 
 
 def test_openai_images_client_retries_generate_without_optional_fields(

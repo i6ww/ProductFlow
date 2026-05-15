@@ -803,6 +803,90 @@ def test_provider_config_api_masks_keys_preserves_blank_update_and_validates_bin
     assert archived.json()["archived_at"] is not None
 
 
+def test_provider_config_supports_google_gemini_profiles_bindings_and_import(configured_env: Path) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+    _unlock_settings(client)
+
+    created = client.post(
+        "/api/settings/provider-profiles",
+        json={
+            "name": "Gemini 图片",
+            "provider_type": "google_gemini",
+            "base_url": None,
+            "api_key": "google-secret-key",
+            "capabilities": ["image_google_gemini"],
+            "default_models": {"image_model": "gemini-2.5-flash-image"},
+            "config": {},
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    profile = created.json()
+    profile_id = profile["id"]
+    assert profile["provider_type"] == "google_gemini"
+    assert profile["capabilities"] == ["image_google_gemini"]
+    assert profile["base_url"] is None
+    assert profile["has_api_key"] is True
+    assert "google-secret-key" not in str(profile)
+
+    rejected_base_url = client.post(
+        "/api/settings/provider-profiles",
+        json={
+            "name": "Gemini 自定义地址",
+            "provider_type": "google_gemini",
+            "base_url": "https://example.invalid",
+            "api_key": "google-secret-key",
+            "capabilities": ["image_google_gemini"],
+            "default_models": {},
+            "config": {},
+            "enabled": True,
+        },
+    )
+    assert rejected_base_url.status_code == 400
+    assert "暂不支持自定义 Base URL" in rejected_base_url.json()["detail"]
+
+    image_binding = client.patch(
+        "/api/settings/provider-bindings/image",
+        json={
+            "provider_kind": "google_gemini_image",
+            "provider_profile_id": profile_id,
+            "model_settings": {"model": "gemini-2.5-flash-image"},
+            "config": {"gemini_api_version": "v1beta", "gemini_output_mime_type": "image/png"},
+        },
+    )
+    assert image_binding.status_code == 200
+    assert image_binding.json()["provider_kind"] == "google_gemini_image"
+    assert image_binding.json()["config"] == {
+        "gemini_api_version": "v1beta",
+        "gemini_output_mime_type": "image/png",
+    }
+
+    image_config = resolve_image_provider_config()
+    assert image_config.provider_kind == "google_gemini_image"
+    assert image_config.api_key == "google-secret-key"
+    assert image_config.base_url is None
+    assert image_config.model == "gemini-2.5-flash-image"
+    assert image_config.gemini_api_version == "v1beta"
+    assert image_config.gemini_output_mime_type == "image/png"
+
+    exported = client.get("/api/settings/export")
+    assert exported.status_code == 200
+    document = exported.json()
+    exported_profile = next(item for item in document["provider_profiles"] if item["id"] == profile_id)
+    assert exported_profile["provider_type"] == "google_gemini"
+    assert exported_profile["api_key"] == "google-secret-key"
+    exported_image = next(item for item in document["provider_bindings"] if item["purpose"] == "image")
+    assert exported_image["provider_kind"] == "google_gemini_image"
+
+    preview = client.post("/api/settings/import/preview", json=document)
+    assert preview.status_code == 200
+    assert preview.json()["provider_profile_count"] >= 1
+
+
 def test_resolvers_ignore_legacy_rows_after_provider_bindings_exist(configured_env: Path) -> None:
     session = get_session_factory()()
     try:

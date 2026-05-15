@@ -88,6 +88,7 @@ class ProviderConfigResponse(BaseModel):
 
 class ProviderProfileCreateRequest(BaseModel):
     name: str = Field(min_length=1)
+    provider_type: str = "openai_compatible"
     base_url: str | None = None
     api_key: str | None = None
     capabilities: list[str] = Field(min_length=1)
@@ -98,6 +99,7 @@ class ProviderProfileCreateRequest(BaseModel):
 
 class ProviderProfileUpdateRequest(BaseModel):
     name: str | None = None
+    provider_type: str | None = None
     base_url: str | None = None
     api_key: str | None = None
     capabilities: list[str] | None = None

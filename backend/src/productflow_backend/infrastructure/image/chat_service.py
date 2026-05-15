@@ -12,6 +12,10 @@ from PIL import Image, ImageDraw
 
 from productflow_backend.config import get_runtime_settings
 from productflow_backend.infrastructure.image.base import parse_size
+from productflow_backend.infrastructure.image.gemini_provider import (
+    GoogleGeminiImageClient,
+    GoogleGeminiReferenceImage,
+)
 from productflow_backend.infrastructure.image.images_provider import ImagesReferenceImage, OpenAIImagesClient
 from productflow_backend.infrastructure.image.responses_provider import (
     OpenAIResponsesImageClient,
@@ -97,6 +101,13 @@ class ImageChatService:
             )
         if self.provider_kind == "openai_images":
             return self._generate_openai_images(
+                prompt=prompt,
+                size=size,
+                history=history,
+                manual_reference_images=manual_reference_images,
+            )
+        if self.provider_kind == "google_gemini_image":
+            return self._generate_google_gemini(
                 prompt=prompt,
                 size=size,
                 history=history,
@@ -272,6 +283,35 @@ class ImageChatService:
             provider_output_json=result.provider_output_json,
         )
 
+    def _generate_google_gemini(
+        self,
+        prompt: str,
+        size: str,
+        history: list[ImageChatTurn],
+        manual_reference_images: list[str],
+    ) -> GeneratedChatImage:
+        client = GoogleGeminiImageClient(self.provider_config)
+        full_prompt = self._build_prompt(prompt=prompt, history=history, size=size)
+        result = client.generate_image(
+            prompt=full_prompt,
+            size=size,
+            reference_images=self._collect_gemini_references(history, manual_reference_images),
+        )
+        return GeneratedChatImage(
+            bytes_data=result.bytes_data,
+            mime_type=result.mime_type,
+            model_name=result.model_name,
+            provider_name=result.provider_name,
+            prompt_version=self.prompt_version,
+            size=size,
+            generated_at=result.generated_at,
+            provider_response_id=result.provider_response_id,
+            previous_response_id=None,
+            image_generation_call_id=None,
+            provider_request_json=result.provider_request_json,
+            provider_output_json=result.provider_output_json,
+        )
+
     def _collect_images_api_references(
         self,
         history: list[ImageChatTurn],
@@ -309,3 +349,17 @@ class ImageChatService:
                 )
             )
         return references
+
+    def _collect_gemini_references(
+        self,
+        history: list[ImageChatTurn],
+        manual_reference_images: list[str],
+    ) -> list[GoogleGeminiReferenceImage]:
+        return [
+            GoogleGeminiReferenceImage(
+                bytes_data=reference.bytes_data,
+                mime_type=reference.mime_type,
+                filename=reference.filename,
+            )
+            for reference in self._collect_images_api_references(history, manual_reference_images)
+        ]

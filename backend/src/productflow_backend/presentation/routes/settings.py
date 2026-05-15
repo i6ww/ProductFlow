@@ -26,9 +26,8 @@ from productflow_backend.config import (
 from productflow_backend.infrastructure.db.models import AppSetting, ProviderBinding, ProviderProfile
 from productflow_backend.infrastructure.provider_config import (
     IMAGE_PROVIDER_KINDS,
-    PROVIDER_CAPABILITIES,
     PROVIDER_PURPOSES,
-    PROVIDER_TYPE_OPENAI_COMPATIBLE,
+    PROVIDER_TYPES,
     TEXT_PROVIDER_KINDS,
     UNSET_PROVIDER_FIELD,
     archive_provider_profile,
@@ -41,6 +40,7 @@ from productflow_backend.infrastructure.provider_config import (
     update_provider_binding,
     update_provider_profile,
     validate_provider_capabilities,
+    validate_provider_profile_contract,
 )
 from productflow_backend.presentation.deps import get_session, require_admin
 from productflow_backend.presentation.schemas.settings import (
@@ -283,22 +283,25 @@ def _normalize_import_profiles(document: SettingsExportDocument) -> list[dict[st
         if profile.id in seen_profile_ids:
             raise ValueError("供应商档案不能重复")
         seen_profile_ids.add(profile.id)
-        if profile.provider_type != PROVIDER_TYPE_OPENAI_COMPATIBLE:
+        if profile.provider_type not in PROVIDER_TYPES:
             raise ValueError("供应商类型不支持")
         capabilities = _dedupe_ordered([str(capability).strip() for capability in profile.capabilities])
         validate_provider_capabilities(capabilities)
-        unknown = set(capabilities) - PROVIDER_CAPABILITIES
-        if unknown:
-            raise ValueError(f"供应商能力不支持: {', '.join(sorted(unknown))}")
         name = profile.name.strip()
         if not name:
             raise ValueError("供应商名称不能为空")
+        base_url = _normalize_optional_text(profile.base_url)
+        validate_provider_profile_contract(
+            provider_type=profile.provider_type,
+            capabilities=capabilities,
+            base_url=base_url,
+        )
         profiles.append(
             {
                 "id": profile.id,
                 "name": name,
                 "provider_type": profile.provider_type,
-                "base_url": _normalize_optional_text(profile.base_url),
+                "base_url": base_url,
                 "api_key": _normalize_optional_text(profile.api_key),
                 "capabilities_json": capabilities,
                 "default_models_json": dict(profile.default_models),
@@ -517,6 +520,7 @@ def create_provider_profile_endpoint(
         profile = create_provider_profile(
             session,
             name=payload.name,
+            provider_type=payload.provider_type,
             base_url=payload.base_url,
             api_key=payload.api_key,
             capabilities=payload.capabilities,
@@ -546,6 +550,7 @@ def update_provider_profile_endpoint(
             session,
             profile_id,
             name=payload.name,
+            provider_type=payload.provider_type,
             base_url=payload.base_url if "base_url" in fields_set else UNSET_PROVIDER_FIELD,
             api_key=payload.api_key if "api_key" in fields_set else UNSET_PROVIDER_FIELD,
             capabilities=payload.capabilities,

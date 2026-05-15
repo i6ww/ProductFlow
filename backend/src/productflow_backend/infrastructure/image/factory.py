@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from productflow_backend.infrastructure.image.base import ImageProvider
+from productflow_backend.infrastructure.image.gemini_provider import GoogleGeminiImageProvider
 from productflow_backend.infrastructure.image.images_provider import OpenAIImagesImageProvider
 from productflow_backend.infrastructure.image.mock_provider import MockImageProvider
 from productflow_backend.infrastructure.image.responses_provider import OpenAIResponsesImageProvider
@@ -16,4 +17,6 @@ def get_image_provider() -> ImageProvider:
         return OpenAIResponsesImageProvider(provider_config)
     if provider_config.provider_kind == "openai_images":
         return OpenAIImagesImageProvider(provider_config)
+    if provider_config.provider_kind == "google_gemini_image":
+        return GoogleGeminiImageProvider(provider_config)
     raise RuntimeError(f"暂不支持的图片 provider: {provider_config.provider_kind}")

@@ -170,6 +170,8 @@ ProductFlow 把模型能力按模态拆分。
   response + retrieve polling，把 provider status 写入任务 progress）
 - `openai_images`（Images API `images.generate` / `images.edit` 兼容接口；不使用 Responses
   `previous_response_id`，连续生图由 ProductFlow 显式传入所选基图和参考图）
+- `google_gemini_image`（Google Gemini native `generateContent` 图片接口，通过官方 `google-genai` SDK 调用；
+  连续生图由 ProductFlow 显式传入所选基图和参考图）
 
 Provider 选择由 `provider_profiles`、`provider_bindings` 和对应 factory 控制。旧 `TEXT_*` / `IMAGE_*`
 环境变量只作为首次迁移输入；运行时 resolver 从供应商档案和用途绑定读取接口类型、连接信息和模型。路由不直接依赖具体 SDK。

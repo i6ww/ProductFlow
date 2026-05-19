@@ -15,11 +15,13 @@ Current observability files and mechanisms:
 - `backend/src/productflow_backend/infrastructure/logging.py` configures stdout plus rotating file logs and deletes expired
   log files.
 - `backend/src/productflow_backend/infrastructure/logging.py` also owns the process-local log context backed by
-  `contextvars`: `request_id`, `workflow_run_id`, and `image_session_generation_task_id`.
+  `contextvars`: `request_id`, `workflow_run_id`, `workflow_node_run_id`, and
+  `image_session_generation_task_id`.
 - `backend/src/productflow_backend/presentation/api.py` sets API request context from `X-Request-ID` or a generated id and
   returns the same value in the response header.
-- `backend/src/productflow_backend/workers.py` sets worker context at the Dramatiq actor boundary for product workflow runs
-  and continuous image-session generation tasks, then clears it when the actor returns or raises.
+- `backend/src/productflow_backend/workers.py` sets worker context at the Dramatiq actor boundary for product workflow
+  run schedulers, product workflow node runs, and continuous image-session generation tasks, then clears it when the actor
+  returns or raises.
 - `backend/src/productflow_backend/workers.py` persists async workflow and continuous image generation state through
   application use cases rather than logging retry state only.
 - `backend/src/productflow_backend/application/product_workflow/execution.py` and
@@ -97,19 +99,22 @@ Do not add `print(...)` to backend application code for diagnostics. Use tests o
 - `new_request_id() -> str`
 - `set_request_id(request_id: str) -> Token[str]` / `reset_request_id(token: Token[str]) -> None`
 - `set_workflow_run_id(workflow_run_id: str) -> Token[str]` / `reset_workflow_run_id(token: Token[str]) -> None`
+- `set_workflow_node_run_id(workflow_node_run_id: str) -> Token[str]` /
+  `reset_workflow_node_run_id(token: Token[str]) -> None`
 - `set_image_session_generation_task_id(task_id: str) -> Token[str]` /
   `reset_image_session_generation_task_id(token: Token[str]) -> None`
 - `current_log_context() -> dict[str, str]`
 - API header contract: request `X-Request-ID` is optional; response `X-Request-ID` is always set.
 
 ### 3. Contracts
-- Log lines include stable, human-readable fields: `request_id`, `workflow_run_id`, and
+- Log lines include stable, human-readable fields: `request_id`, `workflow_run_id`, `workflow_node_run_id`, and
   `image_session_generation_task_id`.
 - API requests accept incoming `X-Request-ID`; when missing, the backend generates one and returns it in the same response
   header.
 - API request id correlation must not change any JSON response model or route response shape.
 - Business error responses converted by the global typed handler still return the normal `X-Request-ID` response header.
 - `run_product_workflow_run(...)` sets `workflow_run_id` only while that Dramatiq actor executes.
+- `run_product_workflow_node_run(...)` sets `workflow_node_run_id` only while that Dramatiq actor executes.
 - `run_image_session_generation_task(...)` sets `image_session_generation_task_id` only while that Dramatiq actor executes.
 - Ordinary process logs outside request/worker context use `-` placeholders.
 - Do not manually pass request ids, workflow run ids, or generation task ids through application DTOs just to support
@@ -129,15 +134,15 @@ Do not add `print(...)` to backend application code for diagnostics. Use tests o
   logging call.
 - Good: continuous image-session worker logs include `image_session_generation_task_id=<task id>`.
 - Base: process startup, Uvicorn lifecycle, and queue recovery logs render `request_id=- workflow_run_id=-
-  image_session_generation_task_id=-`.
+  workflow_node_run_id=- image_session_generation_task_id=-`.
 - Bad: passing request ids through Pydantic response bodies or application DTOs.
 - Bad: setting a contextvar without resetting the token in `finally`.
 
 ### 6. Tests Required
 - Formatter unit test asserting both active context values and stable `-` placeholders.
 - API middleware test asserting incoming/generated `X-Request-ID` and context cleanup after the request.
-- Worker actor boundary test asserting `workflow_run_id` / `image_session_generation_task_id` during execution and cleanup
-  afterward.
+- Worker actor boundary test asserting `workflow_run_id` / `workflow_node_run_id` /
+  `image_session_generation_task_id` during execution and cleanup afterward.
 - Run `uv run --directory backend ruff check .` and backend tests after formatter or middleware changes.
 
 ### 7. Wrong vs Correct

@@ -20,8 +20,10 @@ from productflow_backend.infrastructure.logging import (
     cleanup_old_logs,
     configure_logging,
     reset_image_session_generation_task_id,
+    reset_workflow_node_run_id,
     reset_workflow_run_id,
     set_image_session_generation_task_id,
+    set_workflow_node_run_id,
     set_workflow_run_id,
 )
 from productflow_backend.infrastructure.queue import (
@@ -59,11 +61,11 @@ def run_product_workflow_run(workflow_run_id: str) -> None:
 @dramatiq.actor(max_retries=0, time_limit=PRODUCT_WORKFLOW_WORKER_FAILSAFE_TIME_LIMIT_MS)
 def run_product_workflow_node_run(workflow_node_run_id: str) -> None:
     """商品工作流节点 worker：执行单个 WorkflowNodeRun，完成后唤醒 scheduler。"""
-    token = set_workflow_run_id(workflow_node_run_id)
+    token = set_workflow_node_run_id(workflow_node_run_id)
     try:
         execute_product_workflow_node_run(workflow_node_run_id)
     finally:
-        reset_workflow_run_id(token)
+        reset_workflow_node_run_id(token)
 
 
 @dramatiq.actor(max_retries=0, time_limit=IMAGE_SESSION_WORKER_FAILSAFE_TIME_LIMIT_MS)

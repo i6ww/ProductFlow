@@ -32,11 +32,19 @@ def test_durable_generation_task_contract_keeps_workflow_and_image_models_separa
 
 
 def test_durable_generation_task_contract_matches_worker_actor_retry_policy(configured_env) -> None:
-    from productflow_backend.workers import run_image_session_generation_task, run_product_workflow_run
+    from productflow_backend.workers import (
+        run_image_session_generation_task,
+        run_product_workflow_node_run,
+        run_product_workflow_run,
+    )
 
     assert_actor_uses_durable_generation_contract(
         WORKFLOW_RUN_GENERATION_TASK_CONTRACT,
         run_product_workflow_run,
+    )
+    assert_actor_uses_durable_generation_contract(
+        WORKFLOW_RUN_GENERATION_TASK_CONTRACT,
+        run_product_workflow_node_run,
     )
     assert_actor_uses_durable_generation_contract(
         IMAGE_SESSION_GENERATION_TASK_CONTRACT,

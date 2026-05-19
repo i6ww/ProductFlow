@@ -18,19 +18,23 @@ def _clean_log_context() -> Iterator[None]:
     from productflow_backend.infrastructure.logging import (
         reset_image_session_generation_task_id,
         reset_request_id,
+        reset_workflow_node_run_id,
         reset_workflow_run_id,
         set_image_session_generation_task_id,
         set_request_id,
+        set_workflow_node_run_id,
         set_workflow_run_id,
     )
 
     request_token = set_request_id("-")
     workflow_token = set_workflow_run_id("-")
+    workflow_node_token = set_workflow_node_run_id("-")
     task_token = set_image_session_generation_task_id("-")
     try:
         yield
     finally:
         reset_image_session_generation_task_id(task_token)
+        reset_workflow_node_run_id(workflow_node_token)
         reset_workflow_run_id(workflow_token)
         reset_request_id(request_token)
 
@@ -225,14 +229,16 @@ def test_logging_formatter_includes_current_context_and_stable_empty_context() -
         _ProductFlowFormatter,
         reset_image_session_generation_task_id,
         reset_request_id,
+        reset_workflow_node_run_id,
         reset_workflow_run_id,
         set_image_session_generation_task_id,
         set_request_id,
+        set_workflow_node_run_id,
         set_workflow_run_id,
     )
 
     formatter = _ProductFlowFormatter(
-        "request_id=%(request_id)s workflow_run_id=%(workflow_run_id)s "
+        "request_id=%(request_id)s workflow_run_id=%(workflow_run_id)s workflow_node_run_id=%(workflow_node_run_id)s "
         "image_session_generation_task_id=%(image_session_generation_task_id)s %(message)s"
     )
 
@@ -246,14 +252,17 @@ def test_logging_formatter_includes_current_context_and_stable_empty_context() -
         exc_info=None,
     )
     assert formatter.format(empty_record) == (
-        "request_id=- workflow_run_id=- image_session_generation_task_id=- context placeholder line"
+        "request_id=- workflow_run_id=- workflow_node_run_id=- "
+        "image_session_generation_task_id=- context placeholder line"
     )
     assert "request_id" not in empty_record.__dict__
     assert "workflow_run_id" not in empty_record.__dict__
+    assert "workflow_node_run_id" not in empty_record.__dict__
     assert "image_session_generation_task_id" not in empty_record.__dict__
 
     request_token = set_request_id("request-1")
     workflow_token = set_workflow_run_id("workflow-run-1")
+    workflow_node_token = set_workflow_node_run_id("workflow-node-run-1")
     task_token = set_image_session_generation_task_id("image-task-1")
     try:
         context_record = logging.LogRecord(
@@ -267,14 +276,16 @@ def test_logging_formatter_includes_current_context_and_stable_empty_context() -
         )
 
         assert formatter.format(context_record) == (
-            "request_id=request-1 workflow_run_id=workflow-run-1 "
+            "request_id=request-1 workflow_run_id=workflow-run-1 workflow_node_run_id=workflow-node-run-1 "
             "image_session_generation_task_id=image-task-1 context value line"
         )
         assert "request_id" not in context_record.__dict__
         assert "workflow_run_id" not in context_record.__dict__
+        assert "workflow_node_run_id" not in context_record.__dict__
         assert "image_session_generation_task_id" not in context_record.__dict__
     finally:
         reset_image_session_generation_task_id(task_token)
+        reset_workflow_node_run_id(workflow_node_token)
         reset_workflow_run_id(workflow_token)
         reset_request_id(request_token)
 
@@ -308,6 +319,7 @@ def test_request_id_middleware_returns_header_and_cleans_context(configured_env:
     assert supplied.json() == {
         "request_id": "incoming-request-1",
         "workflow_run_id": "-",
+        "workflow_node_run_id": "-",
         "image_session_generation_task_id": "-",
     }
     assert generated.status_code == 200
@@ -344,7 +356,11 @@ def test_request_id_middleware_preserves_http_exception_body_header_and_context_
 
 def test_worker_actors_set_and_clear_log_context(monkeypatch: pytest.MonkeyPatch, configured_env: Path) -> None:
     from productflow_backend.infrastructure.logging import current_log_context
-    from productflow_backend.workers import run_image_session_generation_task, run_product_workflow_run
+    from productflow_backend.workers import (
+        run_image_session_generation_task,
+        run_product_workflow_node_run,
+        run_product_workflow_run,
+    )
 
     observed: list[dict[str, str]] = []
 
@@ -352,15 +368,23 @@ def test_worker_actors_set_and_clear_log_context(monkeypatch: pytest.MonkeyPatch
         assert workflow_run_id == "workflow-run-1"
         observed.append(current_log_context())
 
+    def capture_workflow_node_context(workflow_node_run_id: str) -> None:
+        assert workflow_node_run_id == "workflow-node-run-1"
+        observed.append(current_log_context())
+
     def capture_image_task_context(task_id: str) -> None:
         assert task_id == "image-task-1"
         observed.append(current_log_context())
 
     monkeypatch.setattr("productflow_backend.workers.execute_product_workflow_run", capture_workflow_context)
+    monkeypatch.setattr("productflow_backend.workers.execute_product_workflow_node_run", capture_workflow_node_context)
     monkeypatch.setattr("productflow_backend.workers.execute_image_session_generation_task", capture_image_task_context)
 
     run_product_workflow_run.fn("workflow-run-1")
     assert current_log_context()["workflow_run_id"] == "-"
+
+    run_product_workflow_node_run.fn("workflow-node-run-1")
+    assert current_log_context()["workflow_node_run_id"] == "-"
 
     run_image_session_generation_task.fn("image-task-1")
     assert current_log_context()["image_session_generation_task_id"] == "-"
@@ -369,11 +393,19 @@ def test_worker_actors_set_and_clear_log_context(monkeypatch: pytest.MonkeyPatch
         {
             "request_id": "-",
             "workflow_run_id": "workflow-run-1",
+            "workflow_node_run_id": "-",
             "image_session_generation_task_id": "-",
         },
         {
             "request_id": "-",
             "workflow_run_id": "-",
+            "workflow_node_run_id": "workflow-node-run-1",
+            "image_session_generation_task_id": "-",
+        },
+        {
+            "request_id": "-",
+            "workflow_run_id": "-",
+            "workflow_node_run_id": "-",
             "image_session_generation_task_id": "image-task-1",
         },
     ]
@@ -384,12 +416,22 @@ def test_worker_actors_clear_log_context_when_execution_raises(
     configured_env: Path,
 ) -> None:
     from productflow_backend.infrastructure.logging import current_log_context
-    from productflow_backend.workers import run_image_session_generation_task, run_product_workflow_run
+    from productflow_backend.workers import (
+        run_image_session_generation_task,
+        run_product_workflow_node_run,
+        run_product_workflow_run,
+    )
 
     def raise_workflow_error(workflow_run_id: str) -> None:
         assert workflow_run_id == "workflow-run-error"
         assert current_log_context()["workflow_run_id"] == "workflow-run-error"
         raise RuntimeError("workflow failed")
+
+    def raise_workflow_node_error(workflow_node_run_id: str) -> None:
+        assert workflow_node_run_id == "workflow-node-run-error"
+        assert current_log_context()["workflow_node_run_id"] == "workflow-node-run-error"
+        assert current_log_context()["workflow_run_id"] == "-"
+        raise RuntimeError("workflow node failed")
 
     def raise_image_task_error(task_id: str) -> None:
         assert task_id == "image-task-error"
@@ -397,11 +439,16 @@ def test_worker_actors_clear_log_context_when_execution_raises(
         raise RuntimeError("image task failed")
 
     monkeypatch.setattr("productflow_backend.workers.execute_product_workflow_run", raise_workflow_error)
+    monkeypatch.setattr("productflow_backend.workers.execute_product_workflow_node_run", raise_workflow_node_error)
     monkeypatch.setattr("productflow_backend.workers.execute_image_session_generation_task", raise_image_task_error)
 
     with pytest.raises(RuntimeError, match="workflow failed"):
         run_product_workflow_run.fn("workflow-run-error")
     assert current_log_context()["workflow_run_id"] == "-"
+
+    with pytest.raises(RuntimeError, match="workflow node failed"):
+        run_product_workflow_node_run.fn("workflow-node-run-error")
+    assert current_log_context()["workflow_node_run_id"] == "-"
 
     with pytest.raises(RuntimeError, match="image task failed"):
         run_image_session_generation_task.fn("image-task-error")

@@ -19,6 +19,7 @@ _UVICORN_FILE_LOGGERS = ("uvicorn.error", "uvicorn.access")
 _EMPTY_CONTEXT_VALUE = "-"
 _request_id_var: ContextVar[str] = ContextVar("request_id", default=_EMPTY_CONTEXT_VALUE)
 _workflow_run_id_var: ContextVar[str] = ContextVar("workflow_run_id", default=_EMPTY_CONTEXT_VALUE)
+_workflow_node_run_id_var: ContextVar[str] = ContextVar("workflow_node_run_id", default=_EMPTY_CONTEXT_VALUE)
 _image_session_generation_task_id_var: ContextVar[str] = ContextVar(
     "image_session_generation_task_id",
     default=_EMPTY_CONTEXT_VALUE,
@@ -45,6 +46,14 @@ def reset_workflow_run_id(token: Token[str]) -> None:
     _workflow_run_id_var.reset(token)
 
 
+def set_workflow_node_run_id(workflow_node_run_id: str) -> Token[str]:
+    return _workflow_node_run_id_var.set(workflow_node_run_id)
+
+
+def reset_workflow_node_run_id(token: Token[str]) -> None:
+    _workflow_node_run_id_var.reset(token)
+
+
 def set_image_session_generation_task_id(task_id: str) -> Token[str]:
     return _image_session_generation_task_id_var.set(task_id)
 
@@ -57,6 +66,7 @@ def current_log_context() -> dict[str, str]:
     return {
         "request_id": _request_id_var.get(),
         "workflow_run_id": _workflow_run_id_var.get(),
+        "workflow_node_run_id": _workflow_node_run_id_var.get(),
         "image_session_generation_task_id": _image_session_generation_task_id_var.get(),
     }
 
@@ -86,6 +96,7 @@ def configure_logging(settings: Settings | None = None) -> None:
     formatter = _ProductFlowFormatter(
         "%(asctime)s %(levelname)s [%(name)s] "
         "request_id=%(request_id)s workflow_run_id=%(workflow_run_id)s "
+        "workflow_node_run_id=%(workflow_node_run_id)s "
         "image_session_generation_task_id=%(image_session_generation_task_id)s %(message)s"
     )
     root_logger = logging.getLogger()

@@ -21,6 +21,7 @@ import {
   Play,
   Plus,
   Settings2,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -1761,6 +1762,7 @@ export function ProductDetailPage() {
     createUserTemplateGroupMutation.isPending ||
     updateUserTemplateGroupMutation.isPending ||
     archiveUserTemplateGroupMutation.isPending;
+  const autoLayoutBusy = structureBusy || !workflow || workflow.nodes.length === 0;
 
   const renderWorkflowToolbarButtons = () => (
     <>
@@ -1777,6 +1779,17 @@ export function ProductDetailPage() {
       >
         {fullWorkflowRunBusy ? <Loader2 size={17} className="animate-spin" /> : <Play size={17} />}
         <span className="mt-1 leading-tight">{fullWorkflowRunBusy ? t("detail.running") : t("detail.runFullWorkflow")}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => workflowCanvasRef.current?.triggerAutoLayout()}
+        disabled={autoLayoutBusy}
+        className="btn-secondary-spring flex w-full flex-col items-center rounded-lg px-1.5 py-2 text-xs font-semibold"
+        title={t("detail.autoLayout")}
+        aria-label={t("detail.autoLayout")}
+      >
+        <Sparkles size={16} />
+        <span className="mt-1 leading-tight">{t("detail.autoLayout")}</span>
       </button>
       <div className="my-1 h-px w-11 self-center bg-slate-200/70 dark:bg-slate-800" />
       <span className="w-full text-center text-[10px] font-semibold leading-none text-slate-500">

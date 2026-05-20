@@ -2292,7 +2292,7 @@ export function ProductDetailPage() {
           <div
             role="toolbar"
             aria-label={t("detail.mobileToolbar")}
-            className="mt-1.5 grid grid-cols-7 gap-1"
+            className="mt-1.5 grid grid-cols-6 gap-1"
           >
             <button
               type="button"
